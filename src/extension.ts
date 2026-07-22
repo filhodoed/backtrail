@@ -4,7 +4,14 @@ import { registerDiffCommand } from './diffCommand';
 import { watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerRestoreCommand } from './restoreCommand';
+import { pruneOlderThan } from './snapshotStore';
 import { listTrackedFolders } from './trackedFolders';
+
+// ponytail: prunes once per activation only, not on a periodic timer — fine
+// for a session that restarts daily, but a VS Code window left open for
+// weeks won't see the 45-day window enforced until reactivated. Add a
+// setInterval sweep if that turns out to matter in practice.
+const RETENTION_DAYS = 45;
 
 export interface BacktrailApi {
 	globalState: vscode.Memento;
@@ -30,6 +37,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		if (watchers.has(folder)) {
 			return;
 		}
+		pruneOlderThan(storeRoot, folder, RETENTION_DAYS);
 		watchers.set(
 			folder,
 			watchTrackedFolder(folder, storeRoot, undefined, (uri) => historyProvider.notifyChange(uri)),
