@@ -2,7 +2,7 @@
   "name": "backtrail",
   "displayName": "backtrail",
   "description": "Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "filhodoed",
   "license": "MIT",
   "repository": {
