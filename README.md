@@ -6,11 +6,13 @@ Not a lightweight git. There's no staging, no commits, no branches. You track a 
 
 ## Features
 
-- **Opt-in tracking, per folder.** Nothing is watched until you run `Backtrail: Track this folder`. A folder inside a git repository can't be tracked — if you're already using git there, this isn't for that folder.
+- **Opt-in tracking, per folder.** Right-click any folder in the Explorer → **Track this folder** — or use the **+** button in the **Tracked Folders** panel (Backtrail's own icon in the Activity Bar) to pick a folder from anywhere on disk; it gets added to your workspace tree automatically. A folder inside a git repository can't be tracked — if you're already using git there, this isn't for that folder.
 - **Continuous history panel.** Select any file in a tracked folder and its version history shows up in the **Backtrail History** view in the Explorer sidebar, newest first.
+- **New/changed badges in the Explorer tree.** A file gets an **N** badge the first time it's captured, or an **M** badge when it changes again after you've already seen it — like an unread-email flag, not a permanent mark. Opening the file in the editor clears its badge; if it changes again afterward, the **M** comes back. A folder containing a badged file shows a subtle indicator too.
 - **Real diffs.** Click a text or image version to open it in VS Code's native diff editor. Other binary formats (`.pptx`, `.xlsx`, `.mp4`, `.pdf`, …) show a size and timestamp instead — there's no meaningful diff to show for those.
 - **Non-destructive restore.** Right-click any version → **Restore this version**. It never overwrites your current file — it writes a new file under `restored/`, mirroring the original folder structure, so you decide what to do with it.
 - **Survives renames — even from Finder.** Renaming or moving a file outside VS Code (Finder, Explorer, `mv`) is invisible to most extensions. Backtrail correlates a delete and a same-content create within a short window so the file's history keeps going instead of restarting.
+- **Tracked Folders panel.** Backtrail's own Activity Bar icon lists every folder you're tracking. Right-click one → **Stop Tracking**; if it's part of your workspace, you'll be asked whether to also remove it from the Explorer tree.
 
 ## Requirements
 

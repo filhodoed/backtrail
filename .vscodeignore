@@ -9,6 +9,8 @@ test/**
 esbuild.js
 vsc-extension-quickstart.md
 CLAUDE.md
+.github/**
+media/marketplace-icon.svg
 **/tsconfig.json
 **/eslint.config.mjs
 **/*.map
