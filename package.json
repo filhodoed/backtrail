@@ -17,7 +17,15 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "backtrail.trackFolder",
+        "title": "Track this folder",
+        "category": "Backtrail"
+      }
+    ]
+  },
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
