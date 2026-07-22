@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-07-22
+
+### Fixed
+
+- Adding a folder via the Tracked Folders **+** button could surface a raw `The "path" argument must be of type string. Received undefined` error, most likely when it was the first folder added to an empty window (VS Code reloads the extension host to switch workspace identity in that case, interrupting whatever ran right after). The folder was already tracked by that point either way — `addFolder`/`untrackFolder` now wrap their work in proper error handling so a failure past that point shows a clear backtrail-branded message instead of a raw internal error.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added
