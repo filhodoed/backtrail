@@ -23,6 +23,11 @@
         "command": "backtrail.trackFolder",
         "title": "Track this folder",
         "category": "Backtrail"
+      },
+      {
+        "command": "backtrail.restoreVersion",
+        "title": "Restore this version",
+        "category": "Backtrail"
       }
     ],
     "views": {
@@ -30,6 +35,14 @@
         {
           "id": "backtrail.history",
           "name": "Backtrail History"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "backtrail.restoreVersion",
+          "when": "view == backtrail.history"
         }
       ]
     }
