@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isTracked, listTrackedFolders, trackFolder, untrackFolder, type KeyValueStore } from '../../src/trackedFolders.ts';
+import {
+	isTracked,
+	listTrackedFolders,
+	resolveTrackedFolder,
+	trackFolder,
+	untrackFolder,
+	type KeyValueStore,
+} from '../../src/trackedFolders.ts';
 
 function createFakeStore(): KeyValueStore {
 	const data = new Map<string, unknown>();
@@ -76,4 +83,37 @@ test('should_be_a_no_op_untracking_a_folder_that_was_never_tracked', async () =>
 	await untrackFolder(store, '/Users/edsonjunior/other');
 
 	assert.deepEqual(listTrackedFolders(store), ['/Users/edsonjunior/notes']);
+});
+
+test('should_resolve_tracked_folder_for_file_directly_inside', () => {
+	const result = resolveTrackedFolder(['/Users/edsonjunior/notes'], '/Users/edsonjunior/notes/a.md');
+
+	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: 'a.md' });
+});
+
+test('should_resolve_tracked_folder_for_file_in_subdirectory', () => {
+	const result = resolveTrackedFolder(['/Users/edsonjunior/notes'], '/Users/edsonjunior/notes/docs/a.md');
+
+	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: 'docs/a.md' });
+});
+
+test('should_return_undefined_for_file_outside_any_tracked_folder', () => {
+	const result = resolveTrackedFolder(['/Users/edsonjunior/notes'], '/Users/edsonjunior/other/a.md');
+
+	assert.equal(result, undefined);
+});
+
+test('should_not_match_sibling_folder_with_similar_name_prefix', () => {
+	const result = resolveTrackedFolder(['/Users/edsonjunior/notes'], '/Users/edsonjunior/notes-backup/a.md');
+
+	assert.equal(result, undefined);
+});
+
+test('should_pick_first_matching_folder_when_multiple_are_tracked', () => {
+	const result = resolveTrackedFolder(
+		['/Users/edsonjunior/docs', '/Users/edsonjunior/notes'],
+		'/Users/edsonjunior/notes/a.md',
+	);
+
+	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: 'a.md' });
 });

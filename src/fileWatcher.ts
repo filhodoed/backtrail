@@ -29,6 +29,7 @@ export function watchTrackedFolder(
 	absoluteFolderPath: string,
 	storeRoot: string,
 	ignoreConfig: IgnoreConfig = DEFAULT_IGNORE_CONFIG,
+	onCapture?: (uri: vscode.Uri) => void,
 ): vscode.Disposable {
 	const folderUri = vscode.Uri.file(absoluteFolderPath);
 	const pattern = new vscode.RelativePattern(folderUri, '**/*');
@@ -38,7 +39,15 @@ export function watchTrackedFolder(
 	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
 
 	const onCreateOrChange = (uri: vscode.Uri) =>
-		captureIfNotIgnored(absoluteFolderPath, storeRoot, uri, ignoreConfig, pendingDeletions, pendingCaptureTimers);
+		captureIfNotIgnored(
+			absoluteFolderPath,
+			storeRoot,
+			uri,
+			ignoreConfig,
+			pendingDeletions,
+			pendingCaptureTimers,
+			onCapture,
+		);
 	const onDelete = (uri: vscode.Uri) => registerPendingDeletion(absoluteFolderPath, storeRoot, uri, pendingDeletions);
 
 	const cleanup = new vscode.Disposable(() => {
@@ -106,6 +115,7 @@ function captureIfNotIgnored(
 	ignoreConfig: IgnoreConfig,
 	pendingDeletions: Map<string, TrackedPendingDeletion>,
 	pendingCaptureTimers: Set<ReturnType<typeof setTimeout>>,
+	onCapture?: (uri: vscode.Uri) => void,
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
 
@@ -127,12 +137,14 @@ function captureIfNotIgnored(
 	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
 	if (existingSeriesId) {
 		captureSnapshot(storeRoot, absoluteFolderPath, existingSeriesId, relPath, content, isBinary);
+		onCapture?.(uri);
 		return;
 	}
 
 	const immediateMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
 	if (immediateMatch) {
 		captureSnapshot(storeRoot, absoluteFolderPath, immediateMatch.seriesId, relPath, content, isBinary);
+		onCapture?.(uri);
 		return;
 	}
 
@@ -141,6 +153,7 @@ function captureIfNotIgnored(
 		const delayedMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
 		const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
 		captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
+		onCapture?.(uri);
 	}, RENAME_GRACE_WINDOW_MS);
 	pendingCaptureTimers.add(graceTimer);
 }

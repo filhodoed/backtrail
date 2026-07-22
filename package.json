@@ -1,7 +1,7 @@
 {
   "name": "backtrail",
   "displayName": "backtrail",
-  "description": "Git-free continuous file history — diff and non-destructive restore, right in VS Code's native Timeline panel.",
+  "description": "Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.",
   "version": "0.0.1",
   "publisher": "filhodoed",
   "license": "MIT",
@@ -24,7 +24,15 @@
         "title": "Track this folder",
         "category": "Backtrail"
       }
-    ]
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "backtrail.history",
+          "name": "Backtrail History"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

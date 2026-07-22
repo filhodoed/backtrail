@@ -3,15 +3,19 @@ import * as vscode from 'vscode';
 import { isInsideGitRepo } from './gitGuard';
 import { trackFolder } from './trackedFolders';
 
-export function registerCommands(context: vscode.ExtensionContext): void {
+export function registerCommands(context: vscode.ExtensionContext, onFolderTracked: (folder: string) => void): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('backtrail.trackFolder', (folderUri?: vscode.Uri) =>
-			trackFolderCommand(context, folderUri),
+			trackFolderCommand(context, onFolderTracked, folderUri),
 		),
 	);
 }
 
-async function trackFolderCommand(context: vscode.ExtensionContext, folderUri?: vscode.Uri): Promise<void> {
+async function trackFolderCommand(
+	context: vscode.ExtensionContext,
+	onFolderTracked: (folder: string) => void,
+	folderUri?: vscode.Uri,
+): Promise<void> {
 	const folder = folderUri ? { uri: folderUri, name: basename(folderUri.fsPath) } : await pickWorkspaceFolder();
 	if (!folder) {
 		return;
@@ -26,6 +30,7 @@ async function trackFolderCommand(context: vscode.ExtensionContext, folderUri?: 
 	}
 
 	await trackFolder(context.globalState, absolutePath);
+	onFolderTracked(absolutePath);
 	void vscode.window.showInformationMessage(`backtrail: now tracking "${folder.name}".`);
 }
 
