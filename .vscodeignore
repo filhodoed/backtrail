@@ -12,6 +12,10 @@ vsc-extension-quickstart.md
 CLAUDE.md
 .github/**
 media/marketplace-icon.svg
+media/publisher-logo.svg
+media/publisher-logo.png
+media/filhodoed-publisher.svg
+media/filhodoed-publisher-128x128.png
 **/tsconfig.json
 **/eslint.config.mjs
 **/*.map
