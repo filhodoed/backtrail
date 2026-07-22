@@ -1,8 +1,8 @@
 {
   "name": "backtrail",
   "displayName": "backtrail",
-  "description": "Git-free continuous file history — diff and non-destructive restore, right in VS Code's native Timeline panel.",
-  "version": "0.0.1",
+  "description": "Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.",
+  "version": "0.1.0",
   "publisher": "filhodoed",
   "license": "MIT",
   "repository": {
@@ -17,7 +17,72 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "backtrail.trackFolder",
+        "title": "Track this folder",
+        "category": "Backtrail"
+      },
+      {
+        "command": "backtrail.restoreVersion",
+        "title": "Restore this version",
+        "category": "Backtrail"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "backtrail.history",
+          "name": "Backtrail History"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "backtrail.restoreVersion",
+          "when": "view == backtrail.history"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Backtrail",
+      "properties": {
+        "backtrail.ignoredFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "build"
+          ],
+          "description": "Folder names never tracked, at any depth inside a tracked folder."
+        },
+        "backtrail.ignoredExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "File extensions never tracked (e.g. \".log\", \".tmp\")."
+        },
+        "backtrail.maxFileSizeMB": {
+          "type": "number",
+          "default": 50,
+          "description": "Files larger than this are never tracked."
+        },
+        "backtrail.retentionDays": {
+          "type": "number",
+          "default": 45,
+          "description": "Snapshots older than this many days are discarded automatically."
+        }
+      }
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
@@ -28,21 +93,25 @@
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p test",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test:unit": "node --test \"test/unit/**/*.test.ts\"",
+    "test:integration": "vscode-test",
+    "test": "npm run test:unit && npm run test:integration",
+    "package:vsix": "vsce package"
   },
   "devDependencies": {
-    "@types/vscode": "^1.125.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "typescript-eslint": "^8.61.1",
-    "eslint": "^10.5.0",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "@vscode/test-cli": "^0.0.15",
-    "@vscode/test-electron": "^3.0.0"
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "diff": "^8.0.4",
