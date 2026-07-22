@@ -77,6 +77,18 @@ suite('File Watcher Integration', () => {
 		assert.equal(seriesId, undefined);
 	});
 
+	test('creating a new subfolder does not throw EISDIR', async () => {
+		writeFileSync(join(trackedFolder, 'notas.md'), 'trigger para dar tempo ao watcher');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
+
+		mkdirSync(join(trackedFolder, 'nova-pasta'));
+
+		await new Promise((resolve) => setTimeout(resolve, 500));
+
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'nova-pasta');
+		assert.equal(seriesId, undefined);
+	});
+
 	test('renaming a file outside VS Code continues the same series', async function () {
 		this.timeout(35000);
 		const oldPath = join(trackedFolder, 'antigo.md');
