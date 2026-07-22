@@ -45,6 +45,33 @@
           "when": "view == backtrail.history"
         }
       ]
+    },
+    "configuration": {
+      "title": "Backtrail",
+      "properties": {
+        "backtrail.ignoredFolders": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["node_modules", ".git", "dist", "build"],
+          "description": "Folder names never tracked, at any depth inside a tracked folder."
+        },
+        "backtrail.ignoredExtensions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "File extensions never tracked (e.g. \".log\", \".tmp\")."
+        },
+        "backtrail.maxFileSizeMB": {
+          "type": "number",
+          "default": 50,
+          "description": "Files larger than this are never tracked."
+        },
+        "backtrail.retentionDays": {
+          "type": "number",
+          "default": 45,
+          "description": "Snapshots older than this many days are discarded automatically."
+        }
+      }
     }
   },
   "scripts": {
