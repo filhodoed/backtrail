@@ -4,6 +4,18 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-07-22
+
+### Fixed
+
+- Creating a subfolder inside a tracked folder — including the folder just added via the Tracked Folders **+** button — crashed the extension host with an uncaught `EISDIR: illegal operation on a directory, read`. The watcher now skips directories instead of trying to read them as files.
+- A tracked folder that had been moved, deleted, or unmounted (an ejected external drive, for example) crashed the entire activation on the next VS Code startup — not just that one folder, but every command backtrail provides, with no way to untrack it short of manually editing extension storage. Activation now skips the unreachable folder and keeps going.
+- Any transient filesystem error inside the watcher (a file removed between the change event and the read, a corrupted history index) could still crash the extension host the same way; watcher callbacks now fail safe instead of throwing.
+- Switching the active editor while a tracked folder was unreachable produced an unhandled promise rejection.
+- A corrupted history index for a tracked folder used to stay corrupted forever, silently dropping every future save for that folder. It now self-heals on the next capture (past history for that folder is lost, but tracking keeps working).
+- When two deleted files shared identical content, a new file with matching content could be attributed to the wrong one as its rename history. It's now matched to the most recently deleted match, which better reflects how a real rename actually happens.
+- The packaged `.vsix` was accidentally including this repo's internal `.claude/` configuration.
+
 ## [0.2.1] - 2026-07-22
 
 ### Fixed

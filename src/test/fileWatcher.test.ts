@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RENAME_CORRELATION_WINDOW_MS, watchTrackedFolder } from '../fileWatcher';
@@ -87,6 +87,20 @@ suite('File Watcher Integration', () => {
 
 		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'nova-pasta');
 		assert.equal(seriesId, undefined);
+	});
+
+	test('a corrupt index.json does not crash the watcher — it self-heals on the next capture', async () => {
+		writeFileSync(join(trackedFolder, 'notas.md'), 'trigger para dar tempo ao watcher');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
+
+		const bucketId = readdirSync(storeRoot)[0];
+		writeFileSync(join(storeRoot, bucketId, 'index.json'), '{ not valid json');
+
+		writeFileSync(join(trackedFolder, 'depois.md'), 'deveria sobreviver ao índice corrompido');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'depois.md') !== undefined);
+
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'depois.md')!;
+		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
 	});
 
 	test('renaming a file outside VS Code continues the same series', async function () {

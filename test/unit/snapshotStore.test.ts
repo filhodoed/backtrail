@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -175,4 +175,32 @@ test('should_remove_series_entirely_when_all_its_versions_are_pruned', (t) => {
 	const seriesId = findActiveSeriesId(storeRoot, folder, 'notas.md');
 
 	assert.equal(seriesId, undefined);
+});
+
+test('should_treat_a_corrupt_index_as_empty_instead_of_throwing', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('antes da corrupção'), false);
+	writeFileSync(join(storeRoot, bucketId, 'index.json'), '{ not valid json');
+
+	const seriesId = findActiveSeriesId(storeRoot, folder, 'notas.md');
+
+	assert.equal(seriesId, undefined);
+});
+
+test('should_self_heal_a_corrupt_index_on_the_next_capture', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('antes da corrupção'), false);
+	writeFileSync(join(storeRoot, bucketId, 'index.json'), '{ not valid json');
+
+	captureSnapshot(storeRoot, folder, 'series-2', 'depois.md', Buffer.from('depois da corrupção'), false);
+	const versions = listVersions(storeRoot, folder, 'series-2');
+
+	assert.equal(versions.length, 1);
+	assert.equal(versions[0].relPath, 'depois.md');
 });

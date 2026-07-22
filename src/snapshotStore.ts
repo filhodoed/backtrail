@@ -39,7 +39,14 @@ function readIndex(storeRoot: string, bucketId: string): StoreIndex {
 	if (!existsSync(path)) {
 		return { series: {} };
 	}
-	return JSON.parse(readFileSync(path, 'utf8')) as StoreIndex;
+	try {
+		return JSON.parse(readFileSync(path, 'utf8')) as StoreIndex;
+	} catch {
+		// A truncated/corrupt index (crash mid-write, two windows racing the
+		// same file) must not permanently break this bucket — treat it like a
+		// missing index. The next write replaces it with a fresh, valid one.
+		return { series: {} };
+	}
 }
 
 function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): void {

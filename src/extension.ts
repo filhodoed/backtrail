@@ -45,7 +45,12 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		const uri = editor?.document.uri;
 		historyProvider.setActiveUri(uri);
 		if (uri) {
-			await markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider);
+			try {
+				await markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider);
+			} catch {
+				// Fire-and-forget from onDidChangeActiveTextEditor — an unreachable
+				// tracked folder shouldn't surface as an unhandled rejection.
+			}
 		}
 	}
 
@@ -58,14 +63,20 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		if (watchers.has(folder)) {
 			return;
 		}
-		pruneOlderThan(storeRoot, folder, getRetentionDays());
-		watchers.set(
-			folder,
-			watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => {
-				historyProvider.notifyChange(uri);
-				decorationProvider.refresh(uri);
-			}),
-		);
+		try {
+			pruneOlderThan(storeRoot, folder, getRetentionDays());
+			watchers.set(
+				folder,
+				watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => {
+					historyProvider.notifyChange(uri);
+					decorationProvider.refresh(uri);
+				}),
+			);
+		} catch {
+			// A tracked folder that's gone (moved, deleted, unmounted drive)
+			// must not abort activation — every other folder, and command
+			// registration itself, still needs to happen below.
+		}
 	}
 
 	function stopWatching(folder: string): void {
