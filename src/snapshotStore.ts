@@ -14,12 +14,12 @@ interface StoreIndex {
 	series: Record<string, SnapshotVersion[]>;
 }
 
-function hashOf(data: string | Uint8Array): string {
+export function hashContent(data: string | Uint8Array): string {
 	return createHash('sha256').update(data).digest('hex');
 }
 
 export function bucketIdFor(absoluteFolderPath: string): string {
-	return hashOf(realpathSync(absoluteFolderPath));
+	return hashContent(realpathSync(absoluteFolderPath));
 }
 
 function bucketDir(storeRoot: string, bucketId: string): string {
@@ -57,7 +57,7 @@ export function captureSnapshot(
 	now: Date = new Date(),
 ): SnapshotVersion {
 	const bucketId = bucketIdFor(absoluteFolderPath);
-	const contentHash = hashOf(content);
+	const contentHash = hashContent(content);
 
 	mkdirSync(blobsDir(storeRoot, bucketId), { recursive: true });
 	const blobPath = join(blobsDir(storeRoot, bucketId), `${contentHash}.blob`);

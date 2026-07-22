@@ -4,13 +4,26 @@ import { relative } from 'node:path';
 import * as vscode from 'vscode';
 import { isBinaryContent } from './binaryDetector';
 import { DEFAULT_IGNORED_FOLDERS, DEFAULT_MAX_FILE_SIZE_BYTES, shouldIgnore, type IgnoreConfig } from './ignoreFilters';
-import { captureSnapshot, findActiveSeriesId } from './snapshotStore';
+import { findMatchingPendingDeletion, type PendingDeletion } from './renameCorrelation';
+import { captureSnapshot, findActiveSeriesId, hashContent, listVersions } from './snapshotStore';
 
 const DEFAULT_IGNORE_CONFIG: IgnoreConfig = {
 	ignoredFolders: DEFAULT_IGNORED_FOLDERS,
 	ignoredExtensions: [],
 	maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES,
 };
+
+export const RENAME_CORRELATION_WINDOW_MS = 5000;
+
+// Delete and create events for the same rename aren't guaranteed to arrive in
+// order — the create can land before the delete finishes registering as
+// pending. This grace period gives a same-content delete a short chance to
+// show up before a look-like-new file is finalized under a brand new series.
+export const RENAME_GRACE_WINDOW_MS = 500;
+
+interface TrackedPendingDeletion extends PendingDeletion {
+	timer: ReturnType<typeof setTimeout>;
+}
 
 export function watchTrackedFolder(
 	absoluteFolderPath: string,
@@ -19,11 +32,71 @@ export function watchTrackedFolder(
 ): vscode.Disposable {
 	const folderUri = vscode.Uri.file(absoluteFolderPath);
 	const pattern = new vscode.RelativePattern(folderUri, '**/*');
-	const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, true);
+	const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
 
-	const onEvent = (uri: vscode.Uri) => captureIfNotIgnored(absoluteFolderPath, storeRoot, uri, ignoreConfig);
+	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
+	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
 
-	return vscode.Disposable.from(watcher, watcher.onDidCreate(onEvent), watcher.onDidChange(onEvent));
+	const onCreateOrChange = (uri: vscode.Uri) =>
+		captureIfNotIgnored(absoluteFolderPath, storeRoot, uri, ignoreConfig, pendingDeletions, pendingCaptureTimers);
+	const onDelete = (uri: vscode.Uri) => registerPendingDeletion(absoluteFolderPath, storeRoot, uri, pendingDeletions);
+
+	const cleanup = new vscode.Disposable(() => {
+		for (const { timer } of pendingDeletions.values()) {
+			clearTimeout(timer);
+		}
+		pendingDeletions.clear();
+		for (const timer of pendingCaptureTimers) {
+			clearTimeout(timer);
+		}
+		pendingCaptureTimers.clear();
+	});
+
+	return vscode.Disposable.from(
+		watcher,
+		watcher.onDidCreate(onCreateOrChange),
+		watcher.onDidChange(onCreateOrChange),
+		watcher.onDidDelete(onDelete),
+		cleanup,
+	);
+}
+
+function registerPendingDeletion(
+	absoluteFolderPath: string,
+	storeRoot: string,
+	uri: vscode.Uri,
+	pendingDeletions: Map<string, TrackedPendingDeletion>,
+): void {
+	const relPath = relative(absoluteFolderPath, uri.fsPath);
+	const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+	if (!seriesId) {
+		return;
+	}
+
+	const versions = listVersions(storeRoot, absoluteFolderPath, seriesId);
+	const lastVersion = versions[versions.length - 1];
+	if (!lastVersion) {
+		return;
+	}
+
+	const timer = setTimeout(() => pendingDeletions.delete(relPath), RENAME_CORRELATION_WINDOW_MS);
+	pendingDeletions.set(relPath, { seriesId, relPath, contentHash: lastVersion.contentHash, timer });
+}
+
+function consumeMatchingPendingDeletion(
+	pendingDeletions: Map<string, TrackedPendingDeletion>,
+	contentHash: string,
+): PendingDeletion | undefined {
+	const match = findMatchingPendingDeletion(pendingDeletions, contentHash);
+	if (!match) {
+		return undefined;
+	}
+	const tracked = pendingDeletions.get(match.relPath);
+	if (tracked) {
+		clearTimeout(tracked.timer);
+	}
+	pendingDeletions.delete(match.relPath);
+	return match;
 }
 
 function captureIfNotIgnored(
@@ -31,6 +104,8 @@ function captureIfNotIgnored(
 	storeRoot: string,
 	uri: vscode.Uri,
 	ignoreConfig: IgnoreConfig,
+	pendingDeletions: Map<string, TrackedPendingDeletion>,
+	pendingCaptureTimers: Set<ReturnType<typeof setTimeout>>,
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
 
@@ -47,7 +122,25 @@ function captureIfNotIgnored(
 
 	const content = readFileSync(uri.fsPath);
 	const isBinary = isBinaryContent(content);
-	const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath) ?? randomUUID();
+	const contentHash = hashContent(content);
 
-	captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
+	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+	if (existingSeriesId) {
+		captureSnapshot(storeRoot, absoluteFolderPath, existingSeriesId, relPath, content, isBinary);
+		return;
+	}
+
+	const immediateMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
+	if (immediateMatch) {
+		captureSnapshot(storeRoot, absoluteFolderPath, immediateMatch.seriesId, relPath, content, isBinary);
+		return;
+	}
+
+	const graceTimer = setTimeout(() => {
+		pendingCaptureTimers.delete(graceTimer);
+		const delayedMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
+		const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
+		captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
+	}, RENAME_GRACE_WINDOW_MS);
+	pendingCaptureTimers.add(graceTimer);
 }
