@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
 import { registerCommands } from './commands';
 import { getIgnoreConfig, getRetentionDays } from './config';
+import { createDecorationProvider, markFileAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { registerDiffCommand } from './diffCommand';
 import { watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerRestoreCommand } from './restoreCommand';
 import { pruneOlderThan } from './snapshotStore';
+import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
+import { TrackedFoldersProvider } from './trackedFoldersProvider';
 import { listTrackedFolders } from './trackedFolders';
 
 // ponytail: prunes once per activation only, not on a periodic timer — fine
@@ -17,19 +20,37 @@ export interface BacktrailApi {
 	globalState: vscode.Memento;
 	storeRoot: string;
 	historyProvider: BacktrailHistoryProvider;
+	decorationProvider: BacktrailDecorationProvider;
+	trackedFoldersProvider: TrackedFoldersProvider;
 }
 
 export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const storeRoot = context.globalStorageUri.fsPath;
+
 	const historyProvider = new BacktrailHistoryProvider(context, storeRoot);
 	context.subscriptions.push(vscode.window.createTreeView('backtrail.history', { treeDataProvider: historyProvider }));
+
+	const decorationProvider = createDecorationProvider(context.globalState, storeRoot);
+	context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
+
+	const trackedFoldersProvider = new TrackedFoldersProvider(context);
+	context.subscriptions.push(
+		vscode.window.createTreeView('backtrail.trackedFolders', { treeDataProvider: trackedFoldersProvider }),
+	);
+
 	registerDiffCommand(context, storeRoot);
 	registerRestoreCommand(context, storeRoot);
 
-	historyProvider.setActiveUri(vscode.window.activeTextEditor?.document.uri);
-	context.subscriptions.push(
-		vscode.window.onDidChangeActiveTextEditor((editor) => historyProvider.setActiveUri(editor?.document.uri)),
-	);
+	async function handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
+		const uri = editor?.document.uri;
+		historyProvider.setActiveUri(uri);
+		if (uri) {
+			await markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider);
+		}
+	}
+
+	void handleActiveEditorChange(vscode.window.activeTextEditor);
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(handleActiveEditorChange));
 
 	const watchers = new Map<string, vscode.Disposable>();
 
@@ -40,15 +61,34 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		pruneOlderThan(storeRoot, folder, getRetentionDays());
 		watchers.set(
 			folder,
-			watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => historyProvider.notifyChange(uri)),
+			watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => {
+				historyProvider.notifyChange(uri);
+				decorationProvider.refresh(uri);
+			}),
 		);
+	}
+
+	function stopWatching(folder: string): void {
+		watchers.get(folder)?.dispose();
+		watchers.delete(folder);
+	}
+
+	function onFolderTracked(folder: string): void {
+		startWatching(folder);
+		trackedFoldersProvider.refresh();
+	}
+
+	function onFolderUntracked(folder: string): void {
+		stopWatching(folder);
+		trackedFoldersProvider.refresh();
 	}
 
 	for (const folder of listTrackedFolders(context.globalState)) {
 		startWatching(folder);
 	}
 
-	registerCommands(context, startWatching);
+	registerCommands(context, onFolderTracked);
+	registerTrackedFoldersCommands(context, onFolderTracked, onFolderUntracked);
 
 	context.subscriptions.push(
 		new vscode.Disposable(() => {
@@ -59,7 +99,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		}),
 	);
 
-	return { globalState: context.globalState, storeRoot, historyProvider };
+	return { globalState: context.globalState, storeRoot, historyProvider, decorationProvider, trackedFoldersProvider };
 }
 
 export function deactivate() {}

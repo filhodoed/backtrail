@@ -2,7 +2,7 @@
   "name": "backtrail",
   "displayName": "backtrail",
   "description": "Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "filhodoed",
   "license": "MIT",
   "repository": {
@@ -17,6 +17,7 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
+  "icon": "media/marketplace-icon.png",
   "contributes": {
     "commands": [
       {
@@ -28,21 +29,65 @@
         "command": "backtrail.restoreVersion",
         "title": "Restore this version",
         "category": "Backtrail"
+      },
+      {
+        "command": "backtrail.addFolder",
+        "title": "Add Folder to Track",
+        "category": "Backtrail",
+        "icon": "$(add)"
+      },
+      {
+        "command": "backtrail.untrackFolder",
+        "title": "Stop Tracking",
+        "category": "Backtrail"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "backtrail",
+          "title": "Backtrail",
+          "icon": "media/activity-bar-icon.svg"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {
           "id": "backtrail.history",
           "name": "Backtrail History"
         }
+      ],
+      "backtrail": [
+        {
+          "id": "backtrail.trackedFolders",
+          "name": "Tracked Folders"
+        }
       ]
     },
     "menus": {
+      "explorer/context": [
+        {
+          "command": "backtrail.trackFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "backtrail"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "backtrail.addFolder",
+          "when": "view == backtrail.trackedFolders",
+          "group": "navigation"
+        }
+      ],
       "view/item/context": [
         {
           "command": "backtrail.restoreVersion",
           "when": "view == backtrail.history"
+        },
+        {
+          "command": "backtrail.untrackFolder",
+          "when": "view == backtrail.trackedFolders && viewItem == backtrailTrackedFolder"
         }
       ]
     },
