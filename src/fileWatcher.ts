@@ -38,17 +38,32 @@ export function watchTrackedFolder(
 	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
 	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
 
-	const onCreateOrChange = (uri: vscode.Uri) =>
-		captureIfNotIgnored(
-			absoluteFolderPath,
-			storeRoot,
-			uri,
-			ignoreConfig,
-			pendingDeletions,
-			pendingCaptureTimers,
-			onCapture,
-		);
-	const onDelete = (uri: vscode.Uri) => registerPendingDeletion(absoluteFolderPath, storeRoot, uri, pendingDeletions);
+	// Watcher callbacks run outside any caller's try/catch — an uncaught throw
+	// here (a file removed between the event and the read, an unreachable
+	// tracked folder, a corrupt index) crashes the whole extension host, not
+	// just this capture. Best-effort: skip this event, keep watching.
+	const onCreateOrChange = (uri: vscode.Uri) => {
+		try {
+			captureIfNotIgnored(
+				absoluteFolderPath,
+				storeRoot,
+				uri,
+				ignoreConfig,
+				pendingDeletions,
+				pendingCaptureTimers,
+				onCapture,
+			);
+		} catch {
+			// See comment above.
+		}
+	};
+	const onDelete = (uri: vscode.Uri) => {
+		try {
+			registerPendingDeletion(absoluteFolderPath, storeRoot, uri, pendingDeletions);
+		} catch {
+			// See comment above onCreateOrChange.
+		}
+	};
 
 	const cleanup = new vscode.Disposable(() => {
 		for (const { timer } of pendingDeletions.values()) {

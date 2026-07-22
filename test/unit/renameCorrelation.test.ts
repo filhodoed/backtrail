@@ -31,7 +31,7 @@ test('should_return_the_matching_pending_deletion_by_hash', () => {
 	assert.deepEqual(result, { seriesId: 'series-2', relPath: 'outro.md', contentHash: 'bbb' });
 });
 
-test('should_return_first_match_when_multiple_pending_deletions_share_the_same_hash', () => {
+test('should_return_most_recent_match_when_multiple_pending_deletions_share_the_same_hash', () => {
 	const pending = new Map<string, PendingDeletion>([
 		['a.md', { seriesId: 'series-a', relPath: 'a.md', contentHash: 'same' }],
 		['b.md', { seriesId: 'series-b', relPath: 'b.md', contentHash: 'same' }],
@@ -39,5 +39,5 @@ test('should_return_first_match_when_multiple_pending_deletions_share_the_same_h
 
 	const result = findMatchingPendingDeletion(pending, 'same');
 
-	assert.equal(result?.seriesId, 'series-a');
+	assert.equal(result?.seriesId, 'series-b');
 });
