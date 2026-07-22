@@ -119,12 +119,16 @@ function captureIfNotIgnored(
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
 
-	let sizeBytes: number;
+	let stats: ReturnType<typeof statSync>;
 	try {
-		sizeBytes = statSync(uri.fsPath).size;
+		stats = statSync(uri.fsPath);
 	} catch {
 		return;
 	}
+	if (stats.isDirectory()) {
+		return;
+	}
+	const sizeBytes = stats.size;
 
 	if (shouldIgnore(relPath, sizeBytes, ignoreConfig)) {
 		return;
