@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { registerCommands } from './commands';
+import { registerDiffCommand } from './diffCommand';
 import { watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { listTrackedFolders } from './trackedFolders';
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const storeRoot = context.globalStorageUri.fsPath;
 	const historyProvider = new BacktrailHistoryProvider(context, storeRoot);
 	context.subscriptions.push(vscode.window.createTreeView('backtrail.history', { treeDataProvider: historyProvider }));
+	registerDiffCommand(context, storeRoot);
 
 	historyProvider.setActiveUri(vscode.window.activeTextEditor?.document.uri);
 	context.subscriptions.push(
