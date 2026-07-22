@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-07-22
+
+### Changed
+
+- Publisher branding assets (used on the Marketplace publisher profile page, not by the extension itself) are no longer bundled into the packaged `.vsix`.
+
 ## [0.2.2] - 2026-07-22
 
 ### Fixed
