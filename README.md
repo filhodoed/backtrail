@@ -1,3 +1,5 @@
+<img src="media/marketplace-icon.png" alt="Backtrail icon" width="96" height="96">
+
 # backtrail
 
 Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.
