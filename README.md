@@ -1,71 +1,48 @@
-# backtrail README
+# backtrail
 
-This is the README for your extension "backtrail". After writing up a brief description, we recommend including the following sections.
+Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.
+
+Not a lightweight git. There's no staging, no commits, no branches. You track a folder, and from then on every save, create, delete, and rename becomes a point in that file's history automatically — visible in a panel, diffable, restorable. Built for people who work with files, not repositories.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- **Opt-in tracking, per folder.** Nothing is watched until you run `Backtrail: Track this folder`. A folder inside a git repository can't be tracked — if you're already using git there, this isn't for that folder.
+- **Continuous history panel.** Select any file in a tracked folder and its version history shows up in the **Backtrail History** view in the Explorer sidebar, newest first.
+- **Real diffs.** Click a text or image version to open it in VS Code's native diff editor. Other binary formats (`.pptx`, `.xlsx`, `.mp4`, `.pdf`, …) show a size and timestamp instead — there's no meaningful diff to show for those.
+- **Non-destructive restore.** Right-click any version → **Restore this version**. It never overwrites your current file — it writes a new file under `restored/`, mirroring the original folder structure, so you decide what to do with it.
+- **Survives renames — even from Finder.** Renaming or moving a file outside VS Code (Finder, Explorer, `mv`) is invisible to most extensions. Backtrail correlates a delete and a same-content create within a short window so the file's history keeps going instead of restarting.
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+None beyond VS Code itself. Everything runs locally; nothing leaves your machine.
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
 This extension contributes the following settings:
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+- `backtrail.ignoredFolders`: Folder names never tracked, at any depth (default: `node_modules`, `.git`, `dist`, `build`).
+- `backtrail.ignoredExtensions`: File extensions never tracked, e.g. `.log`, `.tmp` (default: none).
+- `backtrail.maxFileSizeMB`: Files larger than this are never tracked (default: `50`).
+- `backtrail.retentionDays`: Snapshots older than this many days are discarded automatically (default: `45`).
 
-## Known Issues
+## Known limitations
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- A rename performed outside VS Code is only recognized if the new file appears within a few seconds of the old one being deleted, with identical content. A rename combined with an edit in the same instant may not be recognized as a continuation.
+- Snapshots are stored unencrypted in VS Code's global storage for the extension. Don't track folders with secrets you wouldn't want readable on disk.
+- Tracking state and history don't sync across machines.
 
-## Release Notes
+## Development
 
-Users appreciate release notes as you update your extension.
+Requires Node 24+ — unit tests run `.ts` files directly via `node --test`, relying on native TypeScript type-stripping (no `ts-node`/`tsx`).
 
-### 1.0.0
+```bash
+npm install
+npm test        # unit tests (node --test) + integration tests (real VS Code host)
+npm run package # builds dist/extension.js
+```
 
-Initial release of ...
+Issues and PRs welcome.
 
-### 1.0.1
+## License
 
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+MIT — see [LICENSE](LICENSE).
