@@ -66,6 +66,23 @@ export function captureSnapshot(
 	const bucketId = bucketIdFor(absoluteFolderPath);
 	const contentHash = hashContent(content);
 
+	const index = readIndex(storeRoot, bucketId);
+	const versions = index.series[seriesId] ?? [];
+
+	// Save can fire the watcher more than once for a single logical edit (VS
+	// Code re-emits on some platforms, a formatter re-saves identical output,
+	// etc.). Appending a version whose content is byte-identical to the one
+	// already at the top of this series would plant a no-op entry with the
+	// same content on both sides of a diff — indistinguishable from "nothing
+	// changed" to the user, and it pushes the real previous version one slot
+	// further away. Treat it as the same version instead of a new one — but
+	// only when relPath also matches: a rename that keeps content unchanged
+	// still needs its own entry, since that's the only record of the rename.
+	const last = versions[versions.length - 1];
+	if (last && last.contentHash === contentHash && last.relPath === relPath) {
+		return last;
+	}
+
 	mkdirSync(blobsDir(storeRoot, bucketId), { recursive: true });
 	const blobPath = join(blobsDir(storeRoot, bucketId), `${contentHash}.blob`);
 	if (!existsSync(blobPath)) {
@@ -80,8 +97,6 @@ export function captureSnapshot(
 		contentHash,
 	};
 
-	const index = readIndex(storeRoot, bucketId);
-	const versions = index.series[seriesId] ?? [];
 	versions.push(version);
 	index.series[seriesId] = versions;
 	writeIndex(storeRoot, bucketId, index);
@@ -110,6 +125,29 @@ export function findActiveSeriesId(storeRoot: string, absoluteFolderPath: string
 		}
 	}
 	return undefined;
+}
+
+export interface ActiveFile {
+	relPath: string;
+	seriesId: string;
+	lastVersion: SnapshotVersion;
+}
+
+export function listActiveFiles(storeRoot: string, absoluteFolderPath: string): ActiveFile[] {
+	const bucketId = bucketIdFor(absoluteFolderPath);
+	const index = readIndex(storeRoot, bucketId);
+
+	// Same "first match wins" rule as findActiveSeriesId: a relPath can only
+	// be current for one series at a time, so the first series found whose
+	// last entry has that relPath is the one that's actually live.
+	const byRelPath = new Map<string, ActiveFile>();
+	for (const [seriesId, versions] of Object.entries(index.series)) {
+		const lastVersion = versions[versions.length - 1];
+		if (lastVersion && !byRelPath.has(lastVersion.relPath)) {
+			byRelPath.set(lastVersion.relPath, { relPath: lastVersion.relPath, seriesId, lastVersion });
+		}
+	}
+	return [...byRelPath.values()];
 }
 
 export function pruneOlderThan(

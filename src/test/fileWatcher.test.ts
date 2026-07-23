@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RENAME_CORRELATION_WINDOW_MS, watchTrackedFolder } from '../fileWatcher';
+import { captureBaselineSnapshots, RENAME_CORRELATION_WINDOW_MS, watchTrackedFolder } from '../fileWatcher';
 import { findActiveSeriesId, listVersions } from '../snapshotStore';
 
 async function waitUntil(condition: () => boolean, timeoutMs = 15000, intervalMs = 100): Promise<void> {
@@ -132,6 +132,49 @@ suite('File Watcher Integration', () => {
 
 		const newSeriesId = findActiveSeriesId(storeRoot, trackedFolder, 'c.md');
 		assert.notEqual(newSeriesId, originalSeriesId);
+	});
+
+	test('baseline capture snapshots a file that existed before tracking started', () => {
+		writeFileSync(join(trackedFolder, 'preexistente.md'), 'conteúdo de antes do tracking');
+
+		captureBaselineSnapshots(trackedFolder, storeRoot);
+
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'preexistente.md');
+		assert.ok(seriesId);
+		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
+	});
+
+	test('baseline capture gives the first real edit a genuine previous version to diff against', async () => {
+		const filePath = join(trackedFolder, 'preexistente.md');
+		writeFileSync(filePath, 'conteúdo de antes do tracking');
+		captureBaselineSnapshots(trackedFolder, storeRoot);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'preexistente.md')!;
+
+		writeFileSync(filePath, 'conteúdo depois da primeira edição');
+		await waitUntil(() => listVersions(storeRoot, trackedFolder, seriesId).length === 2);
+
+		const versions = listVersions(storeRoot, trackedFolder, seriesId);
+		assert.equal(versions.length, 2);
+		assert.notEqual(versions[0].contentHash, versions[1].contentHash);
+	});
+
+	test('baseline capture does not duplicate a file already captured by the watcher', async () => {
+		writeFileSync(join(trackedFolder, 'notas.md'), 'v1');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'notas.md')!;
+
+		captureBaselineSnapshots(trackedFolder, storeRoot);
+
+		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
+	});
+
+	test('baseline capture skips files inside a default-ignored folder', () => {
+		mkdirSync(join(trackedFolder, 'node_modules'), { recursive: true });
+		writeFileSync(join(trackedFolder, 'node_modules', 'left-pad.js'), 'module.exports = {}');
+
+		captureBaselineSnapshots(trackedFolder, storeRoot);
+
+		assert.equal(findActiveSeriesId(storeRoot, trackedFolder, 'node_modules/left-pad.js'), undefined);
 	});
 
 	test('a real deletion is not matched once the correlation window expires', async function () {
