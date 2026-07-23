@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
+import { ChangesProvider } from './changesProvider';
+import { registerOpenChangedFileCommand } from './changesCommands';
 import { registerCommands } from './commands';
 import { getIgnoreConfig, getRetentionDays } from './config';
 import { createDecorationProvider, markFileAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { registerDiffCommand } from './diffCommand';
-import { watchTrackedFolder } from './fileWatcher';
+import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerRestoreCommand } from './restoreCommand';
 import { pruneOlderThan } from './snapshotStore';
@@ -22,6 +24,7 @@ export interface BacktrailApi {
 	historyProvider: BacktrailHistoryProvider;
 	decorationProvider: BacktrailDecorationProvider;
 	trackedFoldersProvider: TrackedFoldersProvider;
+	changesProvider: ChangesProvider;
 }
 
 export function activate(context: vscode.ExtensionContext): BacktrailApi {
@@ -33,13 +36,21 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const decorationProvider = createDecorationProvider(context.globalState, storeRoot);
 	context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
 
+	// Two separate views in the same activity-bar container, stacked and
+	// independently resizable — the same layout git's own Source Control
+	// panel uses for "Changes"/"Staged Changes", rather than one tree with
+	// nested section nodes under a single chevron.
 	const trackedFoldersProvider = new TrackedFoldersProvider(context);
 	context.subscriptions.push(
 		vscode.window.createTreeView('backtrail.trackedFolders', { treeDataProvider: trackedFoldersProvider }),
 	);
 
+	const changesProvider = new ChangesProvider(context, storeRoot);
+	context.subscriptions.push(vscode.window.createTreeView('backtrail.changes', { treeDataProvider: changesProvider }));
+
 	registerDiffCommand(context, storeRoot);
 	registerRestoreCommand(context, storeRoot);
+	registerOpenChangedFileCommand(context, decorationProvider, changesProvider);
 
 	async function handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
 		const uri = editor?.document.uri;
@@ -47,6 +58,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		if (uri) {
 			try {
 				await markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider);
+				changesProvider.refresh();
 			} catch {
 				// Fire-and-forget from onDidChangeActiveTextEditor — an unreachable
 				// tracked folder shouldn't surface as an unhandled rejection.
@@ -70,6 +82,14 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 				watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => {
 					historyProvider.notifyChange(uri);
 					decorationProvider.refresh(uri);
+					changesProvider.refresh();
+					if (vscode.window.activeTextEditor?.document.uri.fsPath === uri.fsPath) {
+						void markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider)
+							.then(() => changesProvider.refresh())
+							.catch(() => {
+								// Same fire-and-forget rationale as handleActiveEditorChange above.
+							});
+					}
 				}),
 			);
 		} catch {
@@ -85,13 +105,21 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	}
 
 	function onFolderTracked(folder: string): void {
+		try {
+			captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig());
+		} catch {
+			// A folder that vanished between tracking and the baseline scan
+			// (moved, deleted) shouldn't block watching from starting below.
+		}
 		startWatching(folder);
 		trackedFoldersProvider.refresh();
+		changesProvider.refresh();
 	}
 
 	function onFolderUntracked(folder: string): void {
 		stopWatching(folder);
 		trackedFoldersProvider.refresh();
+		changesProvider.refresh();
 	}
 
 	for (const folder of listTrackedFolders(context.globalState)) {
@@ -99,7 +127,9 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	}
 
 	registerCommands(context, onFolderTracked);
-	registerTrackedFoldersCommands(context, onFolderTracked, onFolderUntracked);
+	registerTrackedFoldersCommands(context, storeRoot, decorationProvider, onFolderTracked, onFolderUntracked, () =>
+		changesProvider.refresh(),
+	);
 
 	context.subscriptions.push(
 		new vscode.Disposable(() => {
@@ -110,7 +140,14 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		}),
 	);
 
-	return { globalState: context.globalState, storeRoot, historyProvider, decorationProvider, trackedFoldersProvider };
+	return {
+		globalState: context.globalState,
+		storeRoot,
+		historyProvider,
+		decorationProvider,
+		trackedFoldersProvider,
+		changesProvider,
+	};
 }
 
 export function deactivate() {}

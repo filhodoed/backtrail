@@ -4,6 +4,23 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-23
+
+### Added
+
+- **Changes** view, alongside **Tracked Folders**, as its own resizable panel — the same layout git's own Source Control panel uses for "Changes"/"Staged Changes", rather than a chevron nested inside one tree. Lists every pending change across all tracked folders, split into **Modified** and **New**. Clicking a file opens its diff and marks it as seen.
+- Tracking a folder now captures a baseline snapshot of every file already in it, so the first real edit afterward has something genuine to diff against instead of comparing against nothing.
+- **Mark All Changes As Seen**, a right-click action on a tracked folder, clears the New/Modified backlog that baseline capture creates (or after catching up on a batch of changes) in one action instead of opening every file by hand.
+- New and changed files are now colored green in the Explorer tree, matching git's own added/untracked color, alongside the existing **N**/**M** badge.
+- Marketplace category changed from **Other** to **SCM Providers**, which is what this extension actually is.
+
+### Fixed
+
+- A file's first captured version had no diff command at all — clicking its only timestamp did nothing. It now diffs against an empty file, the same way git shows a brand-new file as entirely additions.
+- Saving a file that was already the active editor never cleared its New/Modified badge, since "seen" state only ever updated when switching which file was active. Saving the active file now marks it seen too.
+- A save that fired the file watcher twice for the same edit (happens on some platforms/editors) recorded a duplicate, identical version — pushing the real previous version out of reach and making the newest timestamp's diff show no change at all. Back-to-back captures with identical content and the same path are now collapsed into one version; a rename that keeps content unchanged still gets its own version, since that's the only record of the rename.
+- A tracked folder that no longer exists on disk, or a corrupted entry in extension storage, could break the whole Changes list for every other folder — or even make **Add Folder** report a false failure after the folder had already been tracked successfully. Both are now tolerated.
+
 ## [0.2.3] - 2026-07-22
 
 ### Changed

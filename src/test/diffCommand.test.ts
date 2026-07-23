@@ -93,7 +93,7 @@ suite('Diff Command Integration', () => {
 		assert.equal(item.command?.command, SHOW_DIFF_COMMAND);
 	});
 
-	test('tree item has no command for the first version in a series', () => {
+	test('tree item wires the diff command against an empty original for the first version in a series', () => {
 		const provider = new BacktrailHistoryProvider({ globalState: api.globalState } as vscode.ExtensionContext, api.storeRoot);
 		const element: VersionTreeItem = {
 			version: makeVersion({}),
@@ -104,7 +104,21 @@ suite('Diff Command Integration', () => {
 
 		const item = provider.getTreeItem(element);
 
-		assert.equal(item.command, undefined);
+		assert.equal(item.command?.command, SHOW_DIFF_COMMAND);
+		assert.equal(item.command?.arguments?.[1], undefined);
+	});
+
+	test('shows a diff against an empty original when the file has no previous version', async () => {
+		const first = captureSnapshot(api.storeRoot, folder, 'diff-test-series-first', 'nova.md', Buffer.from('conteudo inicial'), false);
+
+		await vscode.commands.executeCommand(SHOW_DIFF_COMMAND, folder, undefined, first);
+		await waitUntil(() => findDiffTab() !== undefined);
+
+		const tab = findDiffTab();
+		assert.ok(tab);
+		const input = tab.input as vscode.TabInputTextDiff;
+		assert.equal(basename(input.original.fsPath), 'nova.md');
+		assert.equal(basename(input.modified.fsPath), 'nova.md');
 	});
 
 	test('tree item wires the version-info command for non-diffable binaries', () => {

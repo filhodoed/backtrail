@@ -28,6 +28,13 @@ test('should_list_no_folders_when_store_is_empty', () => {
 	assert.deepEqual(listTrackedFolders(store), []);
 });
 
+test('should_filter_out_corrupt_non_string_entries_instead_of_surfacing_them', async () => {
+	const store = createFakeStore();
+	await store.update('backtrail.trackedFolders', ['/tmp/valid', undefined, null, '', 42]);
+
+	assert.deepEqual(listTrackedFolders(store), ['/tmp/valid']);
+});
+
 test('should_track_a_folder', async () => {
 	const store = createFakeStore();
 

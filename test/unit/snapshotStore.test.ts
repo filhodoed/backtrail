@@ -67,6 +67,44 @@ test('should_capture_multiple_versions_in_chronological_order', (t) => {
 	assert.ok(new Date(versions[0].timestamp) < new Date(versions[1].timestamp));
 });
 
+test('should_not_append_a_new_version_when_content_is_identical_to_the_last_one', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(2));
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(1));
+
+	const versions = listVersions(storeRoot, folder, 'series-1');
+
+	assert.equal(versions.length, 1);
+});
+
+test('should_append_a_new_version_for_a_rename_even_when_content_is_unchanged', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'antigo.md', Buffer.from('conteúdo'), false, daysAgo(1));
+	captureSnapshot(storeRoot, folder, 'series-1', 'novo.md', Buffer.from('conteúdo'), false);
+
+	const versions = listVersions(storeRoot, folder, 'series-1');
+
+	assert.equal(versions.length, 2);
+	assert.equal(versions[1].relPath, 'novo.md');
+});
+
+test('should_append_a_new_version_when_content_differs_from_the_last_one_even_if_seen_before', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(3));
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v2'), false, daysAgo(2));
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(1));
+
+	const versions = listVersions(storeRoot, folder, 'series-1');
+
+	assert.equal(versions.length, 3);
+});
+
 test('should_read_back_exact_content_of_a_captured_version', (t) => {
 	const storeRoot = makeTempDir(t, 'backtrail-store-');
 	const folder = makeTempDir(t, 'backtrail-folder-');

@@ -1,15 +1,20 @@
 import { basename } from 'node:path';
 import * as vscode from 'vscode';
+import { markFolderAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { isInsideGitRepo } from './gitGuard';
 import { trackFolder, untrackFolder } from './trackedFolders';
 
 export const ADD_FOLDER_COMMAND = 'backtrail.addFolder';
 export const UNTRACK_FOLDER_COMMAND = 'backtrail.untrackFolder';
+export const MARK_FOLDER_SEEN_COMMAND = 'backtrail.markFolderSeen';
 
 export function registerTrackedFoldersCommands(
 	context: vscode.ExtensionContext,
+	storeRoot: string,
+	decorationProvider: BacktrailDecorationProvider,
 	onFolderTracked: (folder: string) => void,
 	onFolderUntracked: (folder: string) => void,
+	onChangesReset: () => void,
 ): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand(ADD_FOLDER_COMMAND, (folderUri?: vscode.Uri) =>
@@ -18,6 +23,10 @@ export function registerTrackedFoldersCommands(
 		vscode.commands.registerCommand(UNTRACK_FOLDER_COMMAND, (folder: string) =>
 			untrackFolderCommand(context, folder, onFolderUntracked),
 		),
+		vscode.commands.registerCommand(MARK_FOLDER_SEEN_COMMAND, async (folder: string) => {
+			await markFolderAsSeen(context.globalState, storeRoot, folder, decorationProvider);
+			onChangesReset();
+		}),
 	);
 }
 
@@ -54,7 +63,14 @@ async function addFolderCommand(
 		// extension host to switch workspace identity, which can cut off
 		// everything below this point. The folder stays tracked either way.
 		await trackFolder(context.globalState, absolutePath);
-		onFolderTracked(absolutePath);
+		// Tracking already succeeded above — a hiccup refreshing the tree view
+		// or starting the watcher shouldn't surface as "couldn't add that
+		// folder" when the folder demonstrably was added.
+		try {
+			onFolderTracked(absolutePath);
+		} catch {
+			// See comment above.
+		}
 
 		// Always append — start index is the current folder count, delete count
 		// is 0 — never replaces the existing workspace folders.

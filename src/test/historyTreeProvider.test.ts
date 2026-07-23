@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { watchTrackedFolder } from '../fileWatcher';
+import { captureBaselineSnapshots, watchTrackedFolder } from '../fileWatcher';
 import { trackFolder } from '../trackedFolders';
 import type { BacktrailApi } from '../extension';
 
@@ -63,6 +63,23 @@ suite('History Tree Provider Integration', () => {
 		const children = api.historyProvider.getChildren();
 		assert.equal(children.length, 2);
 		assert.ok(children[0].version.timestamp >= children[1].version.timestamp);
+	});
+
+	test('the first edit after tracking a pre-existing file diffs against its real prior content, not empty', async () => {
+		const filePath = join(trackedFolder, 'preexistente.md');
+		writeFileSync(filePath, 'conteúdo de antes do tracking');
+		captureBaselineSnapshots(trackedFolder, api.storeRoot);
+
+		const doc = await vscode.workspace.openTextDocument(filePath);
+		await vscode.window.showTextDocument(doc);
+		await waitUntil(() => api.historyProvider.getChildren().length === 1);
+
+		writeFileSync(filePath, 'conteúdo depois da primeira edição');
+		await waitUntil(() => api.historyProvider.getChildren().length === 2);
+
+		const [newest] = api.historyProvider.getChildren();
+		assert.ok(newest.previousVersion, 'the first real edit should have a baseline to diff against');
+		assert.equal(newest.previousVersion?.sizeBytes, Buffer.byteLength('conteúdo de antes do tracking'));
 	});
 
 	test('returns no children for a leaf tree item', () => {

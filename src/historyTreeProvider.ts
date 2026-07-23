@@ -41,13 +41,11 @@ export class BacktrailHistoryProvider implements vscode.TreeDataProvider<Version
 		item.id = `${element.folder}:${element.version.relPath}:${element.index}`;
 
 		if (canShowDiff(element.version)) {
-			if (element.previousVersion) {
-				item.command = {
-					command: SHOW_DIFF_COMMAND,
-					title: 'Show Diff',
-					arguments: [element.folder, element.previousVersion, element.version],
-				};
-			}
+			item.command = {
+				command: SHOW_DIFF_COMMAND,
+				title: 'Show Diff',
+				arguments: [element.folder, element.previousVersion, element.version],
+			};
 		} else {
 			item.command = {
 				command: SHOW_VERSION_INFO_COMMAND,
