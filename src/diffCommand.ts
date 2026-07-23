@@ -14,7 +14,7 @@ export function registerDiffCommand(context: vscode.ExtensionContext, storeRoot:
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			SHOW_DIFF_COMMAND,
-			(folder: string, older: SnapshotVersion, newer: SnapshotVersion) =>
+			(folder: string, older: SnapshotVersion | undefined, newer: SnapshotVersion) =>
 				showDiff(storeRoot, folder, older, newer, tmpRoot),
 		),
 		vscode.commands.registerCommand(SHOW_VERSION_INFO_COMMAND, (version: SnapshotVersion) => showVersionInfo(version)),
@@ -25,15 +25,26 @@ export function registerDiffCommand(context: vscode.ExtensionContext, storeRoot:
 async function showDiff(
 	storeRoot: string,
 	folder: string,
-	older: SnapshotVersion,
+	older: SnapshotVersion | undefined,
 	newer: SnapshotVersion,
 	tmpRoot: string,
 ): Promise<void> {
-	const oldPath = writeTempSide(tmpRoot, storeRoot, folder, older);
+	const oldPath = older ? writeTempSide(tmpRoot, storeRoot, folder, older) : writeEmptySide(tmpRoot, newer);
 	const newPath = writeTempSide(tmpRoot, storeRoot, folder, newer);
 
-	const title = `${basename(newer.relPath)} (${formatTimestamp(older.timestamp)} ↔ ${formatTimestamp(newer.timestamp)})`;
+	const oldLabel = older ? formatTimestamp(older.timestamp) : 'created';
+	const title = `${basename(newer.relPath)} (${oldLabel} ↔ ${formatTimestamp(newer.timestamp)})`;
 	await vscode.commands.executeCommand('vscode.diff', vscode.Uri.file(oldPath), vscode.Uri.file(newPath), title);
+}
+
+function writeEmptySide(tmpRoot: string, newer: SnapshotVersion): string {
+	const dir = join(tmpRoot, 'empty');
+	const filePath = join(dir, basename(newer.relPath));
+	if (!existsSync(filePath)) {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(filePath, '');
+	}
+	return filePath;
 }
 
 function writeTempSide(tmpRoot: string, storeRoot: string, folder: string, version: SnapshotVersion): string {

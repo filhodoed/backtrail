@@ -2,7 +2,7 @@
   "name": "backtrail",
   "displayName": "backtrail",
   "description": "Continuous file history for folders without git — track every save, view diffs, and restore any version without overwriting your files.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "publisher": "filhodoed",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,7 @@
     "vscode": "^1.125.0"
   },
   "categories": [
-    "Other"
+    "SCM Providers"
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -40,6 +40,11 @@
         "command": "backtrail.untrackFolder",
         "title": "Stop Tracking",
         "category": "Backtrail"
+      },
+      {
+        "command": "backtrail.markFolderSeen",
+        "title": "Mark All Changes As Seen",
+        "category": "Backtrail"
       }
     ],
     "viewsContainers": {
@@ -62,6 +67,10 @@
         {
           "id": "backtrail.trackedFolders",
           "name": "Tracked Folders"
+        },
+        {
+          "id": "backtrail.changes",
+          "name": "Changes"
         }
       ]
     },
@@ -87,6 +96,10 @@
         },
         {
           "command": "backtrail.untrackFolder",
+          "when": "view == backtrail.trackedFolders && viewItem == backtrailTrackedFolder"
+        },
+        {
+          "command": "backtrail.markFolderSeen",
           "when": "view == backtrail.trackedFolders && viewItem == backtrailTrackedFolder"
         }
       ]

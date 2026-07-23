@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { relative } from 'node:path';
+import { readFileSync, readdirSync, statSync, type Dirent } from 'node:fs';
+import { join, relative } from 'node:path';
 import * as vscode from 'vscode';
 import { isBinaryContent } from './binaryDetector';
 import { DEFAULT_IGNORED_FOLDERS, DEFAULT_MAX_FILE_SIZE_BYTES, shouldIgnore, type IgnoreConfig } from './ignoreFilters';
@@ -83,6 +83,61 @@ export function watchTrackedFolder(
 		watcher.onDidDelete(onDelete),
 		cleanup,
 	);
+}
+
+// A file tracked for the first time has no earlier Backtrail snapshot to diff
+// its first real edit against — there is no way to reconstruct content that
+// predates tracking. Capturing the on-disk state as a baseline the moment a
+// folder is tracked gives that first edit a genuine predecessor to diff
+// against, instead of an empty-vs-whole-file comparison.
+export function captureBaselineSnapshots(
+	absoluteFolderPath: string,
+	storeRoot: string,
+	ignoreConfig: IgnoreConfig = DEFAULT_IGNORE_CONFIG,
+): void {
+	for (const absolutePath of walkFiles(absoluteFolderPath, ignoreConfig.ignoredFolders)) {
+		const relPath = relative(absoluteFolderPath, absolutePath);
+
+		let sizeBytes: number;
+		try {
+			sizeBytes = statSync(absolutePath).size;
+		} catch {
+			continue;
+		}
+		if (shouldIgnore(relPath, sizeBytes, ignoreConfig)) {
+			continue;
+		}
+		if (findActiveSeriesId(storeRoot, absoluteFolderPath, relPath)) {
+			continue;
+		}
+
+		let content: Buffer;
+		try {
+			content = readFileSync(absolutePath);
+		} catch {
+			continue;
+		}
+		captureSnapshot(storeRoot, absoluteFolderPath, randomUUID(), relPath, content, isBinaryContent(content));
+	}
+}
+
+function* walkFiles(dir: string, ignoredFolders: string[]): Generator<string> {
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			if (!ignoredFolders.includes(entry.name)) {
+				yield* walkFiles(fullPath, ignoredFolders);
+			}
+		} else if (entry.isFile()) {
+			yield fullPath;
+		}
+	}
 }
 
 function registerPendingDeletion(

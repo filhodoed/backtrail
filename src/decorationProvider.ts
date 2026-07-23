@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import { getDecorationState, markSeen } from './seenVersions';
-import { findActiveSeriesId, listVersions } from './snapshotStore';
+import { findActiveSeriesId, listActiveFiles, listVersions } from './snapshotStore';
 import { listTrackedFolders, resolveTrackedFolder, type KeyValueStore } from './trackedFolders';
 
 export interface BacktrailDecorationProvider extends vscode.FileDecorationProvider {
 	refresh(uri: vscode.Uri): void;
+	refreshAll(): void;
 }
 
 export function createDecorationProvider(globalState: KeyValueStore, storeRoot: string): BacktrailDecorationProvider {
@@ -15,6 +16,10 @@ export function createDecorationProvider(globalState: KeyValueStore, storeRoot: 
 
 		refresh(uri: vscode.Uri): void {
 			emitter.fire(uri);
+		},
+
+		refreshAll(): void {
+			emitter.fire(undefined);
 		},
 
 		provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
@@ -35,12 +40,13 @@ export function createDecorationProvider(globalState: KeyValueStore, storeRoot: 
 				return undefined;
 			}
 
+			const color = new vscode.ThemeColor('gitDecoration.addedResourceForeground');
 			const state = getDecorationState(globalState, seriesId, latest.timestamp);
 			if (state === 'new') {
-				return { badge: 'N', tooltip: 'backtrail: new file', propagate: true };
+				return { badge: 'N', tooltip: 'backtrail: new file', color, propagate: true };
 			}
 			if (state === 'changed') {
-				return { badge: 'M', tooltip: 'backtrail: changed since you last viewed it', propagate: true };
+				return { badge: 'M', tooltip: 'backtrail: changed since you last viewed it', color, propagate: true };
 			}
 			return undefined;
 		},
@@ -72,4 +78,20 @@ export async function markFileAsSeen(
 
 	await markSeen(globalState, seriesId, latest.timestamp);
 	decorationProvider.refresh(uri);
+}
+
+// Backing a folder marks every file already in it as "new" the moment it's
+// tracked (see captureBaselineSnapshots) — useful as a diff baseline, but it
+// floods the Changes list on day one. This lets a user clear that noise in
+// one action instead of opening every file by hand.
+export async function markFolderAsSeen(
+	globalState: KeyValueStore,
+	storeRoot: string,
+	folder: string,
+	decorationProvider: BacktrailDecorationProvider,
+): Promise<void> {
+	for (const file of listActiveFiles(storeRoot, folder)) {
+		await markSeen(globalState, file.seriesId, file.lastVersion.timestamp);
+	}
+	decorationProvider.refreshAll();
 }

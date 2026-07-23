@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { ADD_FOLDER_COMMAND, UNTRACK_FOLDER_COMMAND } from '../trackedFoldersCommands';
+import { getDecorationState } from '../seenVersions';
+import { captureSnapshot, findActiveSeriesId } from '../snapshotStore';
+import { ADD_FOLDER_COMMAND, MARK_FOLDER_SEEN_COMMAND, UNTRACK_FOLDER_COMMAND } from '../trackedFoldersCommands';
 import { isTracked, untrackFolder } from '../trackedFolders';
 import type { BacktrailApi } from '../extension';
 
@@ -89,6 +91,26 @@ suite('Tracked Folders Commands Integration', () => {
 
 			assert.equal(isTracked(api.globalState, folder), false);
 		} finally {
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	test('markFolderSeen clears New/Modified state for every file in the folder at once', async () => {
+		const folder = mkdtempSync(join(tmpdir(), 'backtrail-markseen-test-'));
+		await vscode.commands.executeCommand('backtrail.trackFolder', vscode.Uri.file(folder));
+
+		try {
+			const a = captureSnapshot(api.storeRoot, folder, 'markseen-series-a', 'a.md', Buffer.from('v1'), false);
+			const b = captureSnapshot(api.storeRoot, folder, 'markseen-series-b', 'b.md', Buffer.from('v1'), false);
+			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp), 'new');
+			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp), 'new');
+
+			await vscode.commands.executeCommand(MARK_FOLDER_SEEN_COMMAND, folder);
+
+			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp), 'none');
+			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp), 'none');
+		} finally {
+			await untrackFolder(api.globalState, folder);
 			rmSync(folder, { recursive: true, force: true });
 		}
 	});

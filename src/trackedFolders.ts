@@ -13,7 +13,12 @@ export interface ResolvedTrackedFolder {
 const STORAGE_KEY = 'backtrail.trackedFolders';
 
 export function listTrackedFolders(store: KeyValueStore): string[] {
-	return store.get<string[]>(STORAGE_KEY, []);
+	// Defensive: every consumer (tree items, decorations, the watcher) does a
+	// path operation on each entry, and one bad value would take all of them
+	// down at once — filter it out here instead of guarding every call site.
+	return store
+		.get<string[]>(STORAGE_KEY, [])
+		.filter((folder): folder is string => typeof folder === 'string' && folder.length > 0);
 }
 
 export function isTracked(store: KeyValueStore, absoluteFolderPath: string): boolean {
