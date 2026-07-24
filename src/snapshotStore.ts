@@ -54,19 +54,21 @@ function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): voi
 	writeFileSync(indexPath(storeRoot, bucketId), JSON.stringify(index, null, 2), 'utf8');
 }
 
-export function captureSnapshot(
-	storeRoot: string,
-	absoluteFolderPath: string,
-	seriesId: string,
-	relPath: string,
-	content: Uint8Array,
-	isBinary: boolean,
-	now: Date = new Date(),
-): SnapshotVersion {
-	const bucketId = bucketIdFor(absoluteFolderPath);
-	const contentHash = hashContent(content);
+export interface CaptureInput {
+	seriesId: string;
+	relPath: string;
+	content: Uint8Array;
+	isBinary: boolean;
+}
 
-	const index = readIndex(storeRoot, bucketId);
+interface ApplyCaptureResult {
+	version: SnapshotVersion;
+	changed: boolean;
+}
+
+function applyCapture(storeRoot: string, bucketId: string, index: StoreIndex, input: CaptureInput, now: Date): ApplyCaptureResult {
+	const { seriesId, relPath, content, isBinary } = input;
+	const contentHash = hashContent(content);
 	const versions = index.series[seriesId] ?? [];
 
 	// Save can fire the watcher more than once for a single logical edit (VS
@@ -80,7 +82,7 @@ export function captureSnapshot(
 	// still needs its own entry, since that's the only record of the rename.
 	const last = versions[versions.length - 1];
 	if (last && last.contentHash === contentHash && last.relPath === relPath) {
-		return last;
+		return { version: last, changed: false };
 	}
 
 	mkdirSync(blobsDir(storeRoot, bucketId), { recursive: true });
@@ -96,12 +98,65 @@ export function captureSnapshot(
 		isBinary,
 		contentHash,
 	};
-
 	versions.push(version);
 	index.series[seriesId] = versions;
-	writeIndex(storeRoot, bucketId, index);
+	return { version, changed: true };
+}
 
+export function captureSnapshot(
+	storeRoot: string,
+	absoluteFolderPath: string,
+	seriesId: string,
+	relPath: string,
+	content: Uint8Array,
+	isBinary: boolean,
+	now: Date = new Date(),
+): SnapshotVersion {
+	const bucketId = bucketIdFor(absoluteFolderPath);
+	const index = readIndex(storeRoot, bucketId);
+	const { version, changed } = applyCapture(storeRoot, bucketId, index, { seriesId, relPath, content, isBinary }, now);
+	if (changed) {
+		writeIndex(storeRoot, bucketId, index);
+	}
 	return version;
+}
+
+// Baseline scans need to snapshot many files (potentially every file in a
+// large tracked folder) without rereading and rewriting the whole index once
+// per file — that turns an O(n) walk into O(n) full-index-rewrites, which is
+// what froze the extension host on large tracked folders. This reads the
+// index once, skips any relPath that already has an active series (a real
+// edit may have captured it for real while this batch was still building —
+// that capture wins, the baseline entry is redundant), and writes once.
+export function captureSnapshotsBatch(
+	storeRoot: string,
+	absoluteFolderPath: string,
+	entries: readonly CaptureInput[],
+	now: Date = new Date(),
+): void {
+	if (entries.length === 0) {
+		return;
+	}
+	const bucketId = bucketIdFor(absoluteFolderPath);
+	const index = readIndex(storeRoot, bucketId);
+
+	const activeRelPaths = new Set<string>();
+	for (const versions of Object.values(index.series)) {
+		const last = versions[versions.length - 1];
+		if (last) {
+			activeRelPaths.add(last.relPath);
+		}
+	}
+
+	for (const entry of entries) {
+		if (activeRelPaths.has(entry.relPath)) {
+			continue;
+		}
+		applyCapture(storeRoot, bucketId, index, entry, now);
+		activeRelPaths.add(entry.relPath);
+	}
+
+	writeIndex(storeRoot, bucketId, index);
 }
 
 export function listVersions(storeRoot: string, absoluteFolderPath: string, seriesId: string): SnapshotVersion[] {

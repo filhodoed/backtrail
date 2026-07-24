@@ -5,7 +5,15 @@ import * as vscode from 'vscode';
 import { isBinaryContent } from './binaryDetector';
 import { DEFAULT_IGNORED_FOLDERS, DEFAULT_MAX_FILE_SIZE_BYTES, shouldIgnore, type IgnoreConfig } from './ignoreFilters';
 import { findMatchingPendingDeletion, type PendingDeletion } from './renameCorrelation';
-import { captureSnapshot, findActiveSeriesId, hashContent, listVersions } from './snapshotStore';
+import {
+	captureSnapshot,
+	captureSnapshotsBatch,
+	findActiveSeriesId,
+	hashContent,
+	listActiveFiles,
+	listVersions,
+	type CaptureInput,
+} from './snapshotStore';
 
 const DEFAULT_IGNORE_CONFIG: IgnoreConfig = {
 	ignoredFolders: DEFAULT_IGNORED_FOLDERS,
@@ -85,18 +93,49 @@ export function watchTrackedFolder(
 	);
 }
 
+// Chunk size for baseline capture: large enough that the per-chunk index
+// read/write (O(chunk) not O(1)) stays a rounding error against a walk of
+// hundreds of thousands of files, small enough that memory stays bounded
+// (only one chunk's file contents held at once) and the extension host gets
+// to breathe between chunks instead of blocking for the whole walk.
+const BASELINE_CHUNK_SIZE = 200;
+
 // A file tracked for the first time has no earlier Backtrail snapshot to diff
 // its first real edit against — there is no way to reconstruct content that
 // predates tracking. Capturing the on-disk state as a baseline the moment a
 // folder is tracked gives that first edit a genuine predecessor to diff
 // against, instead of an empty-vs-whole-file comparison.
-export function captureBaselineSnapshots(
+//
+// This used to walk the tree synchronously, one file at a time, rereading
+// and rewriting the whole index per file — on a large tracked folder (a home
+// directory, say) that blocked the extension host for minutes with no way
+// to cancel, forcing a VS Code restart. It now works in chunks, yields to
+// the event loop between chunks, and writes the index once per chunk
+// instead of once per file — see captureSnapshotsBatch.
+export async function captureBaselineSnapshots(
 	absoluteFolderPath: string,
 	storeRoot: string,
 	ignoreConfig: IgnoreConfig = DEFAULT_IGNORE_CONFIG,
-): void {
+	token?: { isCancellationRequested: boolean },
+): Promise<void> {
+	// Cheap pre-filter so files already captured by an earlier (possibly
+	// cancelled) baseline run, or by a real edit racing ahead of this scan,
+	// don't get needlessly read and hashed just to be discarded later.
+	// captureSnapshotsBatch re-checks at write time regardless, so this is an
+	// optimization, not the correctness gate.
+	const alreadyTracked = new Set(listActiveFiles(storeRoot, absoluteFolderPath).map((file) => file.relPath));
+
+	let chunk: CaptureInput[] = [];
+
 	for (const absolutePath of walkFiles(absoluteFolderPath, ignoreConfig.ignoredFolders)) {
+		if (token?.isCancellationRequested) {
+			break;
+		}
+
 		const relPath = relative(absoluteFolderPath, absolutePath);
+		if (alreadyTracked.has(relPath)) {
+			continue;
+		}
 
 		let sizeBytes: number;
 		try {
@@ -107,9 +146,6 @@ export function captureBaselineSnapshots(
 		if (shouldIgnore(relPath, sizeBytes, ignoreConfig)) {
 			continue;
 		}
-		if (findActiveSeriesId(storeRoot, absoluteFolderPath, relPath)) {
-			continue;
-		}
 
 		let content: Buffer;
 		try {
@@ -117,7 +153,17 @@ export function captureBaselineSnapshots(
 		} catch {
 			continue;
 		}
-		captureSnapshot(storeRoot, absoluteFolderPath, randomUUID(), relPath, content, isBinaryContent(content));
+		chunk.push({ seriesId: randomUUID(), relPath, content, isBinary: isBinaryContent(content) });
+
+		if (chunk.length >= BASELINE_CHUNK_SIZE) {
+			captureSnapshotsBatch(storeRoot, absoluteFolderPath, chunk);
+			chunk = [];
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+	}
+
+	if (chunk.length > 0) {
+		captureSnapshotsBatch(storeRoot, absoluteFolderPath, chunk);
 	}
 }
 

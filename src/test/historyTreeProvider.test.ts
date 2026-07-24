@@ -68,7 +68,7 @@ suite('History Tree Provider Integration', () => {
 	test('the first edit after tracking a pre-existing file diffs against its real prior content, not empty', async () => {
 		const filePath = join(trackedFolder, 'preexistente.md');
 		writeFileSync(filePath, 'conteúdo de antes do tracking');
-		captureBaselineSnapshots(trackedFolder, api.storeRoot);
+		await captureBaselineSnapshots(trackedFolder, api.storeRoot);
 
 		const doc = await vscode.workspace.openTextDocument(filePath);
 		await vscode.window.showTextDocument(doc);
