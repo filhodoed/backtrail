@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import { getDecorationState } from '../seenVersions';
 import { captureSnapshot, findActiveSeriesId } from '../snapshotStore';
-import { ADD_FOLDER_COMMAND, MARK_FOLDER_SEEN_COMMAND, UNTRACK_FOLDER_COMMAND } from '../trackedFoldersCommands';
+import {
+	ADD_FOLDER_COMMAND,
+	MARK_FOLDER_SEEN_COMMAND,
+	UNTRACK_FOLDER_COMMAND,
+	validateFolderPath,
+} from '../trackedFoldersCommands';
 import { isTracked, untrackFolder } from '../trackedFolders';
 import type { BacktrailApi } from '../extension';
 
@@ -112,6 +117,37 @@ suite('Tracked Folders Commands Integration', () => {
 		} finally {
 			await untrackFolder(api.globalState, folder);
 			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	test('validateFolderPath rejects an empty path', () => {
+		assert.ok(validateFolderPath('   '));
+	});
+
+	test('validateFolderPath rejects a path that does not exist', () => {
+		assert.ok(validateFolderPath('/definitely/not/a/real/path/backtrail-test'));
+	});
+
+	test('validateFolderPath rejects a path that is a file, not a folder', () => {
+		const folder = mkdtempSync(join(tmpdir(), 'backtrail-validate-test-'));
+		const filePath = join(folder, 'notas.md');
+		try {
+			mkdirSync(folder, { recursive: true });
+			writeFileSync(filePath, 'conteúdo');
+			assert.ok(validateFolderPath(filePath));
+		} finally {
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	test('validateFolderPath accepts an existing folder, including a hidden one', () => {
+		const parent = mkdtempSync(join(tmpdir(), 'backtrail-validate-test-'));
+		const hidden = join(parent, '.backtrail-hidden');
+		try {
+			mkdirSync(hidden);
+			assert.equal(validateFolderPath(hidden), undefined);
+		} finally {
+			rmSync(parent, { recursive: true, force: true });
 		}
 	});
 });

@@ -134,10 +134,10 @@ suite('File Watcher Integration', () => {
 		assert.notEqual(newSeriesId, originalSeriesId);
 	});
 
-	test('baseline capture snapshots a file that existed before tracking started', () => {
+	test('baseline capture snapshots a file that existed before tracking started', async () => {
 		writeFileSync(join(trackedFolder, 'preexistente.md'), 'conteúdo de antes do tracking');
 
-		captureBaselineSnapshots(trackedFolder, storeRoot);
+		await captureBaselineSnapshots(trackedFolder, storeRoot);
 
 		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'preexistente.md');
 		assert.ok(seriesId);
@@ -147,7 +147,7 @@ suite('File Watcher Integration', () => {
 	test('baseline capture gives the first real edit a genuine previous version to diff against', async () => {
 		const filePath = join(trackedFolder, 'preexistente.md');
 		writeFileSync(filePath, 'conteúdo de antes do tracking');
-		captureBaselineSnapshots(trackedFolder, storeRoot);
+		await captureBaselineSnapshots(trackedFolder, storeRoot);
 		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'preexistente.md')!;
 
 		writeFileSync(filePath, 'conteúdo depois da primeira edição');
@@ -163,18 +163,46 @@ suite('File Watcher Integration', () => {
 		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
 		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'notas.md')!;
 
-		captureBaselineSnapshots(trackedFolder, storeRoot);
+		await captureBaselineSnapshots(trackedFolder, storeRoot);
 
 		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
 	});
 
-	test('baseline capture skips files inside a default-ignored folder', () => {
+	test('baseline capture skips files inside a default-ignored folder', async () => {
 		mkdirSync(join(trackedFolder, 'node_modules'), { recursive: true });
 		writeFileSync(join(trackedFolder, 'node_modules', 'left-pad.js'), 'module.exports = {}');
 
-		captureBaselineSnapshots(trackedFolder, storeRoot);
+		await captureBaselineSnapshots(trackedFolder, storeRoot);
 
 		assert.equal(findActiveSeriesId(storeRoot, trackedFolder, 'node_modules/left-pad.js'), undefined);
+	});
+
+	test('baseline capture chunks large trees and yields between chunks instead of blocking', async () => {
+		const fileCount = 450; // more than two BASELINE_CHUNK_SIZE (200) chunks
+		for (let i = 0; i < fileCount; i++) {
+			writeFileSync(join(trackedFolder, `arquivo-${i}.md`), `conteúdo ${i}`);
+		}
+
+		await captureBaselineSnapshots(trackedFolder, storeRoot);
+
+		for (const i of [0, 199, 200, 399, 449]) {
+			const seriesId = findActiveSeriesId(storeRoot, trackedFolder, `arquivo-${i}.md`);
+			assert.ok(seriesId, `arquivo-${i}.md should have been captured`);
+		}
+	});
+
+	test('baseline capture stops early when cancelled', async () => {
+		const fileCount = 450;
+		for (let i = 0; i < fileCount; i++) {
+			writeFileSync(join(trackedFolder, `arquivo-${i}.md`), `conteúdo ${i}`);
+		}
+
+		const token = { isCancellationRequested: true };
+		await captureBaselineSnapshots(trackedFolder, storeRoot, undefined, token);
+
+		// Cancelled before the first chunk even starts — nothing should have
+		// been captured, and nothing should have thrown.
+		assert.equal(findActiveSeriesId(storeRoot, trackedFolder, 'arquivo-0.md'), undefined);
 	});
 
 	test('a real deletion is not matched once the correlation window expires', async function () {
