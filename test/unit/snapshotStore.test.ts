@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
 	bucketIdFor,
 	captureSnapshot,
+	captureSnapshotsBatch,
 	findActiveSeriesId,
 	listVersions,
 	pruneOlderThan,
@@ -77,6 +78,20 @@ test('should_not_append_a_new_version_when_content_is_identical_to_the_last_one'
 	const versions = listVersions(storeRoot, folder, 'series-1');
 
 	assert.equal(versions.length, 1);
+});
+
+test('should_not_rewrite_the_index_file_on_disk_for_a_no_op_capture', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	const indexPath = join(storeRoot, bucketId, 'index.json');
+	const mtimeAfterFirstCapture = statSync(indexPath).mtimeMs;
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+
+	assert.equal(statSync(indexPath).mtimeMs, mtimeAfterFirstCapture);
 });
 
 test('should_append_a_new_version_for_a_rename_even_when_content_is_unchanged', (t) => {
@@ -241,4 +256,42 @@ test('should_self_heal_a_corrupt_index_on_the_next_capture', (t) => {
 
 	assert.equal(versions.length, 1);
 	assert.equal(versions[0].relPath, 'depois.md');
+});
+
+test('should_write_the_index_only_once_for_a_whole_batch', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshotsBatch(storeRoot, folder, [
+		{ seriesId: 'series-1', relPath: 'a.md', content: Buffer.from('conteúdo a'), isBinary: false },
+		{ seriesId: 'series-2', relPath: 'b.md', content: Buffer.from('conteúdo b'), isBinary: false },
+		{ seriesId: 'series-3', relPath: 'c.md', content: Buffer.from('conteúdo c'), isBinary: false },
+	]);
+
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'a.md'), 'series-1');
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'b.md'), 'series-2');
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'c.md'), 'series-3');
+});
+
+test('should_be_a_no_op_for_an_empty_batch', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshotsBatch(storeRoot, folder, []);
+
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'anything.md'), undefined);
+});
+
+test('should_skip_a_batch_entry_whose_rel_path_already_has_an_active_series', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'real-edit-series', 'notas.md', Buffer.from('edição real'), false);
+
+	captureSnapshotsBatch(storeRoot, folder, [
+		{ seriesId: 'baseline-series', relPath: 'notas.md', content: Buffer.from('conteúdo de baseline'), isBinary: false },
+	]);
+
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), 'real-edit-series');
+	assert.equal(listVersions(storeRoot, folder, 'real-edit-series').length, 1);
 });

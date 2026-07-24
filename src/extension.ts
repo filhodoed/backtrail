@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesProvider } from './changesProvider';
 import { registerOpenChangedFileCommand } from './changesCommands';
@@ -105,15 +106,33 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	}
 
 	function onFolderTracked(folder: string): void {
-		try {
-			captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig());
-		} catch {
-			// A folder that vanished between tracking and the baseline scan
-			// (moved, deleted) shouldn't block watching from starting below.
-		}
+		// The watcher starts immediately rather than waiting on the baseline
+		// scan below — a large folder's baseline can take a while now that
+		// it no longer blocks the extension host, and real edits made while
+		// it's still running shouldn't be missed. captureSnapshotsBatch's own
+		// active-series check keeps the two from racing incorrectly.
 		startWatching(folder);
 		trackedFoldersProvider.refresh();
 		changesProvider.refresh();
+
+		void vscode.window
+			.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: `backtrail: capturing baseline for "${basename(folder)}"…`,
+					cancellable: true,
+				},
+				async (_progress, token) => {
+					try {
+						await captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig(), token);
+					} catch {
+						// A folder that vanished mid-scan (moved, deleted)
+						// shouldn't surface as an error — watching already
+						// started above regardless.
+					}
+				},
+			)
+			.then(() => changesProvider.refresh());
 	}
 
 	function onFolderUntracked(folder: string): void {

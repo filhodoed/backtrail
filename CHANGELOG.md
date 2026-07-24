@@ -4,6 +4,18 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-24
+
+### Added
+
+- **Track Folder by Path**, a new command (and toolbar button next to **+**) that tracks a folder by typed path instead of the file picker — the only way to reach a hidden folder, since the OS folder picker hides dotfiles/dotfolders by default with no VS Code API to override it.
+- Tracking your entire home folder now asks for confirmation first, since it drags in caches, every project's `node_modules`, mail, photo libraries, and used to be the only way to reach a hidden folder before the by-path command above existed.
+
+### Fixed
+
+- Tracking a large folder (a home directory, for example) froze the extension host for minutes with no way to cancel, often forcing a VS Code restart — the baseline snapshot walk that runs when a folder is first tracked read and hashed every file, and rewrote the entire history index from scratch, once per file, with no yielding. It now works in chunks, yields to the event loop between chunks, writes the index once per chunk instead of once per file, and runs behind a cancellable progress notification instead of blocking silently.
+- A duplicate-content save (the watcher firing twice for one edit, a formatter re-saving identical output) rewrote the history index on disk even though nothing changed, a regression introduced while building the chunked baseline capture above — fixed before release.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added
