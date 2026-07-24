@@ -12,7 +12,7 @@ import { registerRestoreCommand } from './restoreCommand';
 import { pruneOlderThan } from './snapshotStore';
 import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
 import { TrackedFoldersProvider } from './trackedFoldersProvider';
-import { listTrackedFolders } from './trackedFolders';
+import { listTrackedFolders, untrackFolder } from './trackedFolders';
 
 // ponytail: prunes once per activation only, not on a periodic timer — fine
 // for a session that restarts daily, but a VS Code window left open for
@@ -105,6 +105,17 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		watchers.delete(folder);
 	}
 
+	async function untrackAndForget(folder: string): Promise<void> {
+		stopWatching(folder);
+		await untrackFolder(context.globalState, folder);
+		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);
+		if (index !== -1) {
+			vscode.workspace.updateWorkspaceFolders(index, 1);
+		}
+		trackedFoldersProvider.refresh();
+	}
+
 	function onFolderTracked(folder: string): void {
 		// The watcher starts immediately rather than waiting on the baseline
 		// scan below — a large folder's baseline can take a while now that
@@ -115,24 +126,47 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		trackedFoldersProvider.refresh();
 		changesProvider.refresh();
 
+		const cancellation = new vscode.CancellationTokenSource();
+
+		const scan = (async () => {
+			try {
+				await captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig(), cancellation.token);
+			} catch {
+				// A folder that vanished mid-scan (moved, deleted) shouldn't
+				// surface as an error — watching already started above.
+			}
+		})();
+
+		// The Notification toast carries the only Cancel button the Progress
+		// API offers — cancelling mid-scan almost always means "I tracked
+		// the wrong folder," so Cancel here undoes the whole tracking, not
+		// just the baseline walk, instead of leaving it half-tracked with no
+		// history and no obvious way back.
 		void vscode.window
 			.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
-					title: `backtrail: capturing baseline for "${basename(folder)}"…`,
+					title: `backtrail: capturing baseline for "${basename(folder)}"… (cancel to stop tracking this folder)`,
 					cancellable: true,
 				},
-				async (_progress, token) => {
-					try {
-						await captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig(), token);
-					} catch {
-						// A folder that vanished mid-scan (moved, deleted)
-						// shouldn't surface as an error — watching already
-						// started above regardless.
-					}
+				(_progress, token) => {
+					token.onCancellationRequested(() => cancellation.cancel());
+					return scan;
 				},
 			)
-			.then(() => changesProvider.refresh());
+			.then(async () => {
+				if (cancellation.token.isCancellationRequested) {
+					await untrackAndForget(folder);
+				}
+				changesProvider.refresh();
+				cancellation.dispose();
+			});
+
+		// A second, title-less indicator scoped to the Changes view itself —
+		// the Notification toast above is easy to miss or auto-dismiss, and
+		// losing any in-panel sign of activity here read as "broken," not
+		// "still working," the first time a large folder was tracked.
+		void vscode.window.withProgress({ location: { viewId: 'backtrail.changes' } }, () => scan);
 	}
 
 	function onFolderUntracked(folder: string): void {
