@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getDecorationState, markSeen } from './seenVersions';
+import { getDecorationState, markManySeen, markSeen } from './seenVersions';
 import { findActiveSeriesId, listActiveFiles, listVersions } from './snapshotStore';
 import { listTrackedFolders, resolveTrackedFolder, type KeyValueStore } from './trackedFolders';
 
@@ -84,14 +84,23 @@ export async function markFileAsSeen(
 // tracked (see captureBaselineSnapshots) — useful as a diff baseline, but it
 // floods the Changes list on day one. This lets a user clear that noise in
 // one action instead of opening every file by hand.
+//
+// Used to call markSeen once per active file, sequentially — each call reads
+// and rewrites globalState's entire seen-versions map, so a large tracked
+// folder (a home directory, say) turned "mark all as seen" into thousands of
+// full read-modify-write round trips with no feedback, looking stuck or
+// broken exactly like the baseline-capture freeze this mirrors. Collecting
+// every entry and writing once (markManySeen) fixes the same class of bug.
 export async function markFolderAsSeen(
 	globalState: KeyValueStore,
 	storeRoot: string,
 	folder: string,
 	decorationProvider: BacktrailDecorationProvider,
 ): Promise<void> {
-	for (const file of listActiveFiles(storeRoot, folder)) {
-		await markSeen(globalState, file.seriesId, file.lastVersion.timestamp);
-	}
+	const entries = listActiveFiles(storeRoot, folder).map((file) => ({
+		seriesId: file.seriesId,
+		latestTimestamp: file.lastVersion.timestamp,
+	}));
+	await markManySeen(globalState, entries);
 	decorationProvider.refreshAll();
 }
