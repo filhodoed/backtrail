@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-07-24
+
+### Fixed
+
+- **Mark All Changes As Seen** had the same freeze-shaped problem as baseline capture (fixed in 0.4.0) on a large tracked folder: it wrote the whole seen-versions store over again, once per file, sequentially. It now collects every change and writes once.
+
 ## [0.4.0] - 2026-07-24
 
 ### Added
