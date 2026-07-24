@@ -4,6 +4,16 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-24
+
+### Added
+
+- Cancelling a baseline capture in progress (the Cancel button on its notification) now stops tracking that folder entirely, instead of leaving it half-tracked with no history — cancelling almost always means the wrong folder was picked in the first place.
+
+### Fixed
+
+- Chunking baseline capture (0.4.0) to stop it from freezing the extension host also removed the only visible sign, in the Changes view itself, that anything was still happening on a large folder — the notification toast is easy to miss or dismiss. A spinner in the Changes view now runs for the same duration as the notification.
+
 ## [0.4.1] - 2026-07-24
 
 ### Fixed
