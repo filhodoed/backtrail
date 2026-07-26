@@ -9,7 +9,7 @@ import { registerDiffCommand } from './diffCommand';
 import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerRestoreCommand } from './restoreCommand';
-import { pruneOlderThan } from './snapshotStore';
+import { deleteBucket, hardenBucketPermissions, pruneOlderThan } from './snapshotStore';
 import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
 import { TrackedFoldersProvider } from './trackedFoldersProvider';
 import { listTrackedFolders, untrackFolder } from './trackedFolders';
@@ -77,6 +77,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 			return;
 		}
 		try {
+			hardenBucketPermissions(storeRoot, folder);
 			pruneOlderThan(storeRoot, folder, getRetentionDays());
 			watchers.set(
 				folder,
@@ -107,6 +108,11 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 
 	async function untrackAndForget(folder: string): Promise<void> {
 		stopWatching(folder);
+		// Cancelling the baseline scan means "undo tracking this folder
+		// entirely" — unlike the manual Stop Tracking command, there's no
+		// history worth confirming about yet (the baseline that would have
+		// seeded it never finished), so the bucket is deleted unconditionally.
+		deleteBucket(storeRoot, folder);
 		await untrackFolder(context.globalState, folder);
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);

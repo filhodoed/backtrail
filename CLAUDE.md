@@ -10,9 +10,14 @@ Regras locais sobrescreve standards, exceto segurança/arquitetura.
 
 @../../../Library/Mobile Documents/com~apple~CloudDocs/Claude/workspace/projects/backtrail/CLAUDE.md
 
+## Map of Functions
+
+Leitura obrigatória antes de qualquer mudança estrutural de código: [docs/MOF.md](docs/MOF.md) — funções, relacionamentos e raio de impacto (`exposed_to` + `impact_rules`).
+
 ## Estrutura
 
 ```
 backtrail/
 └── docs/
+    └── MOF.md
 ```

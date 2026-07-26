@@ -26,7 +26,8 @@ None beyond VS Code itself. Everything runs locally; nothing leaves your machine
 
 This extension contributes the following settings:
 
-- `backtrail.ignoredFolders`: Folder names never tracked, at any depth (default: `node_modules`, `.git`, `dist`, `build`).
+- `backtrail.ignoredFolders`: Folder names never tracked, at any depth (default: `node_modules`, `.git`, `dist`, `build`, `restored`).
+- `backtrail.ignoredFiles`: Exact file names never tracked, anywhere in a tracked folder (default: `.env`, `.env.local`, `id_rsa`, `id_ed25519`, `.npmrc`, `.netrc`).
 - `backtrail.ignoredExtensions`: File extensions never tracked, e.g. `.log`, `.tmp` (default: none).
 - `backtrail.maxFileSizeMB`: Files larger than this are never tracked (default: `50`).
 - `backtrail.retentionDays`: Snapshots older than this many days are discarded automatically (default: `45`).
@@ -34,7 +35,7 @@ This extension contributes the following settings:
 ## Known limitations
 
 - A rename performed outside VS Code is only recognized if the new file appears within a few seconds of the old one being deleted, with identical content. A rename combined with an edit in the same instant may not be recognized as a continuation.
-- Snapshots are stored unencrypted in VS Code's global storage for the extension. Don't track folders with secrets you wouldn't want readable on disk.
+- Snapshots are stored unencrypted in VS Code's global storage for the extension, readable only by your own user account (files and folders there are created with owner-only permissions). Don't track folders with secrets you wouldn't want readable on disk.
 - Tracking state and history don't sync across machines.
 
 ## Development

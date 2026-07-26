@@ -3,7 +3,13 @@ import { readFileSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import { join, relative } from 'node:path';
 import * as vscode from 'vscode';
 import { isBinaryContent } from './binaryDetector';
-import { DEFAULT_IGNORED_FOLDERS, DEFAULT_MAX_FILE_SIZE_BYTES, shouldIgnore, type IgnoreConfig } from './ignoreFilters';
+import {
+	DEFAULT_IGNORED_FILES,
+	DEFAULT_IGNORED_FOLDERS,
+	DEFAULT_MAX_FILE_SIZE_BYTES,
+	shouldIgnore,
+	type IgnoreConfig,
+} from './ignoreFilters';
 import { findMatchingPendingDeletion, type PendingDeletion } from './renameCorrelation';
 import {
 	captureSnapshot,
@@ -17,6 +23,7 @@ import {
 
 const DEFAULT_IGNORE_CONFIG: IgnoreConfig = {
 	ignoredFolders: DEFAULT_IGNORED_FOLDERS,
+	ignoredFiles: DEFAULT_IGNORED_FILES,
 	ignoredExtensions: [],
 	maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES,
 };
