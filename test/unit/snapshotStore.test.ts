@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -7,7 +7,9 @@ import {
 	bucketIdFor,
 	captureSnapshot,
 	captureSnapshotsBatch,
+	deleteBucket,
 	findActiveSeriesId,
+	hardenBucketPermissions,
 	listVersions,
 	pruneOlderThan,
 	readSnapshotContent,
@@ -294,4 +296,105 @@ test('should_skip_a_batch_entry_whose_rel_path_already_has_an_active_series', (t
 
 	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), 'real-edit-series');
 	assert.equal(listVersions(storeRoot, folder, 'real-edit-series').length, 1);
+});
+
+test('should_recover_from_a_corrupt_index_using_the_backup_written_by_the_previous_capture', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v2'), false);
+	// The second capture's writeIndex should have backed up the index as it
+	// stood after the first capture (one version) before overwriting it.
+	writeFileSync(join(storeRoot, bucketId, 'index.json'), '{ not valid json');
+
+	const versions = listVersions(storeRoot, folder, 'series-1');
+
+	assert.equal(versions.length, 1);
+	assert.equal(versions[0].sizeBytes, Buffer.from('v1').byteLength);
+});
+
+test('should_treat_index_as_empty_when_both_primary_and_backup_are_corrupt', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	writeFileSync(join(storeRoot, bucketId, 'index.json'), '{ not valid json');
+	writeFileSync(join(storeRoot, bucketId, 'index.json.bak'), '{ also not valid');
+
+	const seriesId = findActiveSeriesId(storeRoot, folder, 'notas.md');
+
+	assert.equal(seriesId, undefined);
+});
+
+test('should_reject_reading_a_snapshot_whose_blob_content_does_not_match_its_recorded_hash', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('conteúdo original'), false);
+	const blobPath = join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`);
+	writeFileSync(blobPath, 'conteúdo adulterado');
+
+	assert.throws(() => readSnapshotContent(storeRoot, folder, version), /corrupted/);
+});
+
+test('should_delete_the_whole_bucket_for_a_tracked_folder', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	deleteBucket(storeRoot, folder);
+
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), undefined);
+	assert.equal(existsSync(join(storeRoot, bucketIdFor(folder))), false);
+});
+
+test('should_be_a_no_op_deleting_a_bucket_that_was_never_created', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	assert.doesNotThrow(() => deleteBucket(storeRoot, folder));
+});
+
+test('should_restrict_bucket_and_blob_permissions_after_hardening_a_legacy_bucket', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	const bucketPath = join(storeRoot, bucketId);
+	const blobPath = join(bucketPath, 'blobs', `${version.contentHash}.blob`);
+	// Simulate a bucket created by a pre-hardening version of backtrail.
+	chmodSync(bucketPath, 0o755);
+	chmodSync(blobPath, 0o644);
+
+	hardenBucketPermissions(storeRoot, folder);
+
+	assert.equal(statSync(bucketPath).mode & 0o777, 0o700);
+	assert.equal(statSync(blobPath).mode & 0o777, 0o600);
+});
+
+test('should_skip_a_bucket_that_was_already_hardened_instead_of_re_sweeping_it', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	hardenBucketPermissions(storeRoot, folder);
+	const markerPath = join(storeRoot, bucketId, '.permissions-hardened');
+	const mtimeAfterFirstSweep = statSync(markerPath).mtimeMs;
+
+	hardenBucketPermissions(storeRoot, folder);
+
+	assert.equal(statSync(markerPath).mtimeMs, mtimeAfterFirstSweep);
+});
+
+test('should_be_a_no_op_hardening_a_bucket_that_was_never_created', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	assert.doesNotThrow(() => hardenBucketPermissions(storeRoot, folder));
 });

@@ -29,12 +29,21 @@ async function showDiff(
 	newer: SnapshotVersion,
 	tmpRoot: string,
 ): Promise<void> {
-	const oldPath = older ? writeTempSide(tmpRoot, storeRoot, folder, older) : writeEmptySide(tmpRoot, newer);
-	const newPath = writeTempSide(tmpRoot, storeRoot, folder, newer);
+	try {
+		const oldPath = older ? writeTempSide(tmpRoot, storeRoot, folder, older) : writeEmptySide(tmpRoot, newer);
+		const newPath = writeTempSide(tmpRoot, storeRoot, folder, newer);
 
-	const oldLabel = older ? formatTimestamp(older.timestamp) : 'created';
-	const title = `${basename(newer.relPath)} (${oldLabel} ↔ ${formatTimestamp(newer.timestamp)})`;
-	await vscode.commands.executeCommand('vscode.diff', vscode.Uri.file(oldPath), vscode.Uri.file(newPath), title);
+		const oldLabel = older ? formatTimestamp(older.timestamp) : 'created';
+		const title = `${basename(newer.relPath)} (${oldLabel} ↔ ${formatTimestamp(newer.timestamp)})`;
+		await vscode.commands.executeCommand('vscode.diff', vscode.Uri.file(oldPath), vscode.Uri.file(newPath), title);
+	} catch (error) {
+		// readSnapshotContent throws on a content-hash mismatch (corrupted
+		// blob) — surface it instead of leaving the diff command silently
+		// failing with no feedback.
+		void vscode.window.showErrorMessage(
+			`backtrail: couldn't open that diff — ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 }
 
 function writeEmptySide(tmpRoot: string, newer: SnapshotVersion): string {
