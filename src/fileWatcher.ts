@@ -45,6 +45,7 @@ export function watchTrackedFolder(
 	storeRoot: string,
 	ignoreConfig: IgnoreConfig = DEFAULT_IGNORE_CONFIG,
 	onCapture?: (uri: vscode.Uri) => void,
+	captureDebounceSeconds: number = DEFAULT_CAPTURE_DEBOUNCE_SECONDS,
 ): vscode.Disposable {
 	const folderUri = vscode.Uri.file(absoluteFolderPath);
 	const pattern = new vscode.RelativePattern(folderUri, '**/*');
@@ -52,6 +53,8 @@ export function watchTrackedFolder(
 
 	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
 	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
+	const captureDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const captureDebounceMs = captureDebounceSeconds * 1000;
 
 	// Watcher callbacks run outside any caller's try/catch — an uncaught throw
 	// here (a file removed between the event and the read, an unreachable
@@ -66,6 +69,8 @@ export function watchTrackedFolder(
 				ignoreConfig,
 				pendingDeletions,
 				pendingCaptureTimers,
+				captureDebounceTimers,
+				captureDebounceMs,
 				onCapture,
 			);
 		} catch {
@@ -89,6 +94,10 @@ export function watchTrackedFolder(
 			clearTimeout(timer);
 		}
 		pendingCaptureTimers.clear();
+		for (const timer of captureDebounceTimers.values()) {
+			clearTimeout(timer);
+		}
+		captureDebounceTimers.clear();
 	});
 
 	return vscode.Disposable.from(
@@ -106,6 +115,14 @@ export function watchTrackedFolder(
 // (only one chunk's file contents held at once) and the extension host gets
 // to breathe between chunks instead of blocking for the whole walk.
 const BASELINE_CHUNK_SIZE = 200;
+
+// A tracked file saved repeatedly in quick succession (an actively-appended
+// log, a session transcript, an autosave loop) used to plant one version per
+// save — for an append-only file, dedup never collapses any of it, since each
+// save's content differs from the last. Collapsing consecutive saves into a
+// single capture once the file goes quiet caps that growth at its source,
+// before retention or the per-series cap (see pruneOlderThan) ever see it.
+export const DEFAULT_CAPTURE_DEBOUNCE_SECONDS = 15;
 
 // A file tracked for the first time has no earlier Backtrail snapshot to diff
 // its first real edit against — there is no way to reconstruct content that
@@ -231,6 +248,44 @@ function consumeMatchingPendingDeletion(
 	return match;
 }
 
+// A file already on an active series has no rename ambiguity left to resolve
+// — that only matters for the create/pending-deletion match below, the first
+// time a relPath joins a series. Repeat saves of an already-tracked file are
+// pure captures, so this is where consecutive saves collapse: rescheduling
+// the same relPath's timer on every event, and only actually reading +
+// capturing once the file has been quiet for captureDebounceMs.
+function scheduleDebouncedCapture(
+	storeRoot: string,
+	absoluteFolderPath: string,
+	seriesId: string,
+	relPath: string,
+	uri: vscode.Uri,
+	captureDebounceTimers: Map<string, ReturnType<typeof setTimeout>>,
+	captureDebounceMs: number,
+	onCapture?: (uri: vscode.Uri) => void,
+): void {
+	const existingTimer = captureDebounceTimers.get(relPath);
+	if (existingTimer) {
+		clearTimeout(existingTimer);
+	}
+
+	const timer = setTimeout(() => {
+		captureDebounceTimers.delete(relPath);
+
+		let content: Buffer;
+		try {
+			content = readFileSync(uri.fsPath);
+		} catch {
+			// Gone by the time the quiet window elapsed (deleted, or renamed away
+			// mid-debounce) — nothing left on disk to capture.
+			return;
+		}
+		captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
+		onCapture?.(uri);
+	}, captureDebounceMs);
+	captureDebounceTimers.set(relPath, timer);
+}
+
 function captureIfNotIgnored(
 	absoluteFolderPath: string,
 	storeRoot: string,
@@ -238,6 +293,8 @@ function captureIfNotIgnored(
 	ignoreConfig: IgnoreConfig,
 	pendingDeletions: Map<string, TrackedPendingDeletion>,
 	pendingCaptureTimers: Set<ReturnType<typeof setTimeout>>,
+	captureDebounceTimers: Map<string, ReturnType<typeof setTimeout>>,
+	captureDebounceMs: number,
 	onCapture?: (uri: vscode.Uri) => void,
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
@@ -257,16 +314,24 @@ function captureIfNotIgnored(
 		return;
 	}
 
+	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+	if (existingSeriesId) {
+		scheduleDebouncedCapture(
+			storeRoot,
+			absoluteFolderPath,
+			existingSeriesId,
+			relPath,
+			uri,
+			captureDebounceTimers,
+			captureDebounceMs,
+			onCapture,
+		);
+		return;
+	}
+
 	const content = readFileSync(uri.fsPath);
 	const isBinary = isBinaryContent(content);
 	const contentHash = hashContent(content);
-
-	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
-	if (existingSeriesId) {
-		captureSnapshot(storeRoot, absoluteFolderPath, existingSeriesId, relPath, content, isBinary);
-		onCapture?.(uri);
-		return;
-	}
 
 	const immediateMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
 	if (immediateMatch) {

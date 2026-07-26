@@ -18,6 +18,13 @@ const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const HARDENED_MARKER_NAME = '.permissions-hardened';
 
+// A series with no version cap grows unbounded for a file saved constantly in
+// a single day (a session transcript, a log) — retention by age alone doesn't
+// help there, since all those versions are still fresh. This is the backstop
+// for that case; the 15s capture debounce (fileWatcher.ts) is the primary
+// mitigation and keeps most series well under this anyway.
+export const DEFAULT_MAX_VERSIONS_PER_SERIES = 100;
+
 export interface SnapshotVersion {
 	relPath: string;
 	timestamp: string;
@@ -326,6 +333,7 @@ export function pruneOlderThan(
 	absoluteFolderPath: string,
 	maxAgeDays: number,
 	now: Date = new Date(),
+	maxVersionsPerSeries: number = DEFAULT_MAX_VERSIONS_PER_SERIES,
 ): number {
 	const bucketId = bucketIdFor(absoluteFolderPath);
 	const index = readMutableIndex(storeRoot, bucketId);
@@ -335,13 +343,18 @@ export function pruneOlderThan(
 	const referencedHashes = new Set<string>();
 
 	for (const seriesId of Object.keys(index.series)) {
-		const kept = index.series[seriesId].filter((version) => {
+		let kept = index.series[seriesId].filter((version) => {
 			const isOld = new Date(version.timestamp).getTime() < cutoff;
 			if (isOld) {
 				prunedCount++;
 			}
 			return !isOld;
 		});
+
+		if (kept.length > maxVersionsPerSeries) {
+			prunedCount += kept.length - maxVersionsPerSeries;
+			kept = kept.slice(-maxVersionsPerSeries);
+		}
 
 		if (kept.length === 0) {
 			delete index.series[seriesId];
