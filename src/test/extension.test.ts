@@ -3,8 +3,14 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { isTracked } from '../trackedFolders';
+import { PRUNE_NOW_COMMAND } from '../extension';
+import { captureSnapshot, listVersions } from '../snapshotStore';
+import { isTracked, trackFolder, untrackFolder } from '../trackedFolders';
 import type { BacktrailApi } from '../extension';
+
+function daysAgo(days: number): Date {
+	return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
 
 suite('Extension Test Suite', () => {
 	let api: BacktrailApi;
@@ -25,6 +31,28 @@ suite('Extension Test Suite', () => {
 		const commands = await vscode.commands.getCommands(true);
 
 		assert.ok(commands.includes('backtrail.trackFolder'));
+	});
+
+	test('backtrail.pruneNow command is registered', async () => {
+		const commands = await vscode.commands.getCommands(true);
+
+		assert.ok(commands.includes(PRUNE_NOW_COMMAND));
+	});
+
+	test('pruneNow removes snapshots older than the retention window for every tracked folder', async () => {
+		const folder = mkdtempSync(join(tmpdir(), 'backtrail-prunenow-test-'));
+		await trackFolder(api.globalState, folder);
+
+		try {
+			captureSnapshot(api.storeRoot, folder, 'prune-now-series', 'notas.md', Buffer.from('velho'), false, daysAgo(50));
+
+			await vscode.commands.executeCommand(PRUNE_NOW_COMMAND);
+
+			assert.equal(listVersions(api.storeRoot, folder, 'prune-now-series').length, 0);
+		} finally {
+			await untrackFolder(api.globalState, folder);
+			rmSync(folder, { recursive: true, force: true });
+		}
 	});
 
 	test('refuses to track a folder inside a git repository', async () => {

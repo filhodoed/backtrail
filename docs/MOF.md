@@ -10,7 +10,7 @@
 mof_meta:
   system_name: "Backtrail"
   purpose: "Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais."
-  version: "0.2.0"
+  version: "0.3.0"
   last_updated: "2026-07-26"
   owners: ["Edson Junior (filhodoed)"]
   domains:
@@ -167,13 +167,13 @@ functions:
     status: "verified"
     responsibilities:
       - "Instanciar e registrar as três tree views, o decoration provider e todos os comandos"
-      - "Iniciar um watcher por pasta rastreada persistida e rodar prune de retenção + hardening de permissões (hardenBucketPermissions) uma vez por ativação"
+      - "Iniciar um watcher por pasta rastreada persistida e rodar prune de retenção + hardening de permissões (hardenBucketPermissions) na ativação"
+      - "Rodar prune de retenção periodicamente (setInterval de 24h) e sob demanda (comando backtrail.pruneNow) para toda pasta rastreada — Fase 2 de performance, 26/07"
       - "Coordenar callbacks de ciclo de vida (onFolderTracked/onFolderUntracked) entre comandos, watchers e views"
       - "Disparar baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)"
       - "Marcar arquivo ativo como visto a cada troca de editor"
     non_responsibilities:
       - "NÃO contém lógica de captura, armazenamento ou filtragem — só orquestra"
-      - "NÃO roda prune periódico (só uma vez por ativação — ver ponytail em extension.ts:17)"
     entities: ["PastaRastreada"]
     interfaces:
       code_ref: "src/extension.ts:activate"
@@ -215,6 +215,7 @@ functions:
       - "Falha ao iniciar watcher de pasta inacessível não aborta a ativação (try/catch em startWatching)"
       - "Watcher inicia ANTES do baseline scan de propósito — edits reais durante o scan não podem ser perdidos; captureSnapshotsBatch resolve a corrida"
       - "untrackAndForget (cancelamento de baseline) chama F_DELETE_BUCKET incondicionalmente, sem perguntar — esse caminho já significa 'desfazer o rastreio inteiro' (Fase 1 de hardening, 26/07)"
+      - "backtrail.pruneNow (F_PRUNE para toda pasta rastreada) e o setInterval periódico são desfeitos no dispose junto com os watchers (Fase 2 de performance, 26/07)"
 
   - id: "F_REGISTRY"
     name: "Registro de Pastas Rastreadas"
@@ -480,6 +481,7 @@ functions:
       - "bucketId = sha256(realpathSync(pasta)) — symlinks para a mesma pasta caem no mesmo bucket"
       - "writeIndex grava em .tmp e faz rename atômico; a versão anterior válida vira index.json.bak antes do rename — crash mid-write não corrompe mais o index.json em uso (Fase 1 de hardening, 26/07)"
       - "Novos buckets/índices/blobs nascem em 0700/0600 (antes 0755/0644) — ver hardenBucketPermissions em F_STORE_QUERY para o sweep de buckets legados"
+      - "index.json é gravado sem pretty-print desde a Fase 2 de performance (26/07) — formato compacto, retrocompatível (JSON.parse não depende de indentação)"
 
   - id: "F_STORE_QUERY"
     name: "Consultar Histórico do Store"
@@ -521,6 +523,8 @@ functions:
     notes:
       - "É o maior fan-in do sistema: qualquer mudança de semântica aqui atravessa quase toda a UI"
       - "readSnapshotContent verifica sha256 do blob lido contra version.contentHash e lança erro em mismatch (Fase 1 de hardening, 26/07) — F_DIFF e F_RESTORE capturam e mostram mensagem, não deixam a exceção crua propagar"
+      - "readIndex cacheia o StoreIndex parseado em memória, keyed pelo caminho do index.json e pelo mtime do arquivo (Fase 2 de performance, 26/07) — uma escrita de outra janela ou ferramenta externa muda o mtime e o cache é ignorado na próxima leitura, sem mensageria de invalidação. Leituras puras (listVersions/findActiveSeriesId/listActiveFiles) compartilham o objeto cacheado sem cópia — é o caminho quente da decoração do Explorer"
+      - "Caminhos de escrita (F_CAPTURE, F_PRUNE) NUNCA usam o objeto do cache diretamente — chamam readMutableIndex, que faz cópia rasa do mapa de séries antes de mutar. Sem isso, uma escrita que falhasse depois de mutar o índice em memória deixaria o cache à frente do disco (leituras mostrando uma versão nunca persistida). Ver IR_012"
 
   - id: "F_PRUNE"
     name: "Aplicar Retenção de Snapshots"
@@ -530,7 +534,7 @@ functions:
     responsibilities:
       - "Descartar versões mais antigas que retentionDays (default 45), remover séries vazias e coletar blobs órfãos (GC por hash referenciado)"
     non_responsibilities:
-      - "NÃO roda periodicamente — só é chamado uma vez por pasta na ativação (ver ponytail em extension.ts)"
+      - "NÃO decide QUANDO rodar — isso é orquestrado por F_ACTIVATE (na ativação, a cada 24h via setInterval, e sob demanda via backtrail.pruneNow, desde a Fase 2 de performance, 26/07)"
     entities: ["SérieDeVersões", "Blob"]
     interfaces:
       code_ref: "src/snapshotStore.ts:pruneOlderThan"
@@ -549,6 +553,7 @@ functions:
       exposed_to: ["F_ACTIVATE"]
     notes:
       - "Única função que DELETA dados PARCIALMENTE (por idade) — ver F_DELETE_BUCKET para exclusão total de um bucket"
+      - "Idempotente e barata de chamar repetidamente — F_ACTIVATE agora a invoca por pasta em três momentos (ativação, setInterval diário, comando manual), não só uma vez por ativação"
 
   - id: "F_DELETE_BUCKET"
     name: "Apagar Histórico Completo de uma Pasta"
@@ -1099,7 +1104,7 @@ relationships:
       coupling: "tight",
       channel: "in-process",
       criticality: "degraded_ok",
-      description: "Prune por pasta, uma vez por ativação",
+      description: "Prune por pasta: na ativação, a cada 24h (setInterval) e sob demanda (comando backtrail.pruneNow) — Fase 2, 26/07",
     }
   - {
       id: "R_004",
@@ -1410,6 +1415,7 @@ impact_rules:
     recommended_actions:
       - "Única função que apaga dados PARCIALMENTE. Um bug aqui é perda de histórico irrecuperável — teste de regressão obrigatório para qualquer mudança"
       - "GC só pode remover blob cujo hash não é referenciado por NENHUMA série remanescente"
+      - "Desde a Fase 2 (26/07) é chamada com muito mais frequência (setInterval diário + comando manual, não só na ativação) — qualquer regressão de performance ou corrupção aqui agora se manifesta bem mais rápido para o usuário"
 
   - id: "IR_011"
     trigger:
@@ -1481,6 +1487,27 @@ impact_rules:
     risk: "low"
     recommended_actions:
       - "Atualizar test/unit/diffEligibility.test.ts"
+
+  - id: "IR_012"
+    trigger:
+      function_id: "F_STORE_QUERY"
+      change: "comportamento — estratégia de cache/invalidação do índice em memória (indexCache, readMutableIndex)"
+    affected_direct: ["F_CAPTURE", "F_PRUNE"]
+    affected_indirect:
+      [
+        "F_WATCH",
+        "F_BASELINE",
+        "F_DECORATE",
+        "F_HISTORY_VIEW",
+        "F_CHANGES_VIEW",
+        "F_SEEN",
+      ]
+    impact_type: "behavioral"
+    risk: "medium"
+    recommended_actions:
+      - "Caminhos de escrita (captureSnapshot, captureSnapshotsBatch, pruneOlderThan) DEVEM usar readMutableIndex, nunca o índice retornado por readIndex diretamente — mutar o objeto cacheado antes de writeIndex confirmar sucesso deixa o cache à frente do disco se a escrita falhar depois (versão fantasma, nunca persistida, aparece em leituras subsequentes)"
+      - "Cache é keyed pelo mtime do index.json — qualquer escrita que não altere o mtime do arquivo quebraria a invalidação; não trocar por cache por conteúdo/hash sem medir o custo do hash em si"
+      - "Rodar test/unit/snapshotStore.test.ts (cenário de mtime cross-window) a cada mudança nesta área"
 ```
 
 ## Regras Transversais (Cross-Cutting)
@@ -1490,7 +1517,7 @@ impact_rules:
 - **Sem git:** pastas dentro de repositório git são bloqueadas nos dois comandos de track (F_GIT_GUARD). Regra de produto, não limitação técnica.
 - **Persistência em três lugares:** `globalState` (pastas rastreadas + mapa de vistos), `globalStorageUri` (index.json + blobs por bucket sha256-de-realpath), e tmpdir (lados de diff, limpos no dispose). Nenhum dado do usuário vai para fora da máquina.
 - **Resiliência de índice:** index.json corrompido (crash mid-write, duas janelas concorrentes) é tratado como vazio e substituído na próxima escrita. Não há lock entre janelas do VS Code — duas janelas gravando no mesmo bucket podem perder escritas (last-writer-wins), limitação conhecida e aceita.
-- **Prune só na ativação:** retenção roda uma vez por pasta na ativação, não em timer (`ponytail:` em extension.ts:17). Janela deixada aberta por semanas não aplica retenção até reativar.
+- **Prune na ativação, periodicamente e sob demanda:** retenção roda por pasta na ativação, a cada 24h via `setInterval` (F_ACTIVATE) e a qualquer momento via comando `backtrail.pruneNow` — Fase 2 de performance (26/07) resolveu a limitação anterior (janela aberta por semanas não aplicava retenção até reativar).
 
 ### Decisões registradas (2026-07-26) — implementadas na Fase 1 de hardening
 
@@ -1512,3 +1539,4 @@ open_questions: [] # perguntas do bootstrap respondidas em 2026-07-26 — ver Re
 | 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                             |
 | 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação |
 | 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas |
+| 0.3.0  | 2026-07-26 | Claude (fde-mof) | Fase 2 de performance implementada (branch perf/index-cache): F_STORE_QUERY ganha cache de StoreIndex por mtime + readMutableIndex (nova IR_012); índice compacto sem pretty-print (F_CAPTURE); F_ACTIVATE ganha prune periódico (setInterval 24h) + comando backtrail.pruneNow, substituindo a limitação "só na ativação" (F_PRUNE não-responsabilidade e regra transversal atualizadas) |

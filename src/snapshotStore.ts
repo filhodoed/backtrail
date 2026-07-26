@@ -9,6 +9,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -60,22 +61,59 @@ function parseIndexFile(path: string): StoreIndex | undefined {
 	}
 }
 
+function statMtimeMs(path: string): number | undefined {
+	try {
+		return statSync(path).mtimeMs;
+	} catch {
+		return undefined;
+	}
+}
+
+// Every decoration/history/changes read used to reopen and reparse
+// index.json from scratch — with the ~/.claude benchmark corpus that's a
+// 768KB JSON.parse per visible file in the Explorer. Caching the parsed
+// index per bucket, keyed by the index file's own mtime, means a bucket is
+// only reparsed once between writes: a second window (or an external tool)
+// writing the same index changes its mtime, so the cache is bypassed rather
+// than trusted stale — no invalidation message needed, the filesystem
+// already carries it.
+const indexCache = new Map<string, { index: StoreIndex; mtimeMs: number }>();
+
 function readIndex(storeRoot: string, bucketId: string): StoreIndex {
 	const path = indexPath(storeRoot, bucketId);
-	const primary = parseIndexFile(path);
-	if (primary) {
-		return primary;
+	const mtimeMs = statMtimeMs(path);
+
+	const cached = indexCache.get(path);
+	if (cached && mtimeMs !== undefined && cached.mtimeMs === mtimeMs) {
+		return cached.index;
 	}
+
 	// A truncated/corrupt index (crash mid-write, two windows racing the same
 	// file, disk corruption) must not permanently break this bucket. Fall back
 	// to the last known-good snapshot (see writeIndex) before giving up and
 	// treating the bucket as empty — losing history to a bit flip is worse
 	// than reading a version that's a few writes stale.
-	const backup = parseIndexFile(`${path}.bak`);
-	if (backup) {
-		return backup;
+	const index = parseIndexFile(path) ?? parseIndexFile(`${path}.bak`) ?? { series: {} };
+
+	if (mtimeMs !== undefined) {
+		indexCache.set(path, { index, mtimeMs });
+	} else {
+		indexCache.delete(path);
 	}
-	return { series: {} };
+	return index;
+}
+
+// Callers that mutate the index (capture, prune) must never do so on the
+// object living in indexCache: if applyCapture/pruneOlderThan touched it in
+// place and the subsequent writeIndex then failed (disk full, permissions),
+// the cache would show a version that was never actually persisted. A
+// shallow copy of the series map decouples the two — cheap even with
+// thousands of series, since it's a copy of the top-level keys, not a
+// reparse — and the per-series array itself is only copied where it's
+// actually touched (see applyCapture).
+function readMutableIndex(storeRoot: string, bucketId: string): StoreIndex {
+	const index = readIndex(storeRoot, bucketId);
+	return { series: { ...index.series } };
 }
 
 function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): void {
@@ -92,7 +130,9 @@ function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): voi
 	// valid index to .bak before the rename gives readIndex a known-good
 	// fallback for the other corruption path (bit rot, an external tool
 	// touching the file) that atomic rename alone doesn't cover.
-	writeFileSync(tmpPath, JSON.stringify(index, null, 2), { encoding: 'utf8', mode: FILE_MODE });
+	// No pretty-print: this file is never hand-edited, and indentation was
+	// costing real bytes/parse time on large indices for zero benefit.
+	writeFileSync(tmpPath, JSON.stringify(index), { encoding: 'utf8', mode: FILE_MODE });
 	if (existsSync(path)) {
 		copyFileSync(path, backupPath);
 		try {
@@ -103,6 +143,14 @@ function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): voi
 		}
 	}
 	renameSync(tmpPath, path);
+
+	// We just wrote this exact index — cache it against the file's new mtime
+	// instead of letting the next readIndex reparse what we already have in
+	// memory.
+	const mtimeMs = statMtimeMs(path);
+	if (mtimeMs !== undefined) {
+		indexCache.set(path, { index, mtimeMs });
+	}
 }
 
 export interface CaptureInput {
@@ -126,7 +174,7 @@ function applyCapture(
 ): ApplyCaptureResult {
 	const { seriesId, relPath, content, isBinary } = input;
 	const contentHash = hashContent(content);
-	const versions = index.series[seriesId] ?? [];
+	const existingVersions = index.series[seriesId] ?? [];
 
 	// Save can fire the watcher more than once for a single logical edit (VS
 	// Code re-emits on some platforms, a formatter re-saves identical output,
@@ -137,7 +185,7 @@ function applyCapture(
 	// further away. Treat it as the same version instead of a new one — but
 	// only when relPath also matches: a rename that keeps content unchanged
 	// still needs its own entry, since that's the only record of the rename.
-	const last = versions[versions.length - 1];
+	const last = existingVersions[existingVersions.length - 1];
 	if (last && last.contentHash === contentHash && last.relPath === relPath) {
 		return { version: last, changed: false };
 	}
@@ -155,8 +203,11 @@ function applyCapture(
 		isBinary,
 		contentHash,
 	};
-	versions.push(version);
-	index.series[seriesId] = versions;
+	// Build a new array rather than pushing onto existingVersions in place —
+	// that array may be the same one still referenced by indexCache (see
+	// readMutableIndex), and mutating it here would leak this version into
+	// the cache before writeIndex has actually persisted it.
+	index.series[seriesId] = [...existingVersions, version];
 	return { version, changed: true };
 }
 
@@ -170,7 +221,7 @@ export function captureSnapshot(
 	now: Date = new Date(),
 ): SnapshotVersion {
 	const bucketId = bucketIdFor(absoluteFolderPath);
-	const index = readIndex(storeRoot, bucketId);
+	const index = readMutableIndex(storeRoot, bucketId);
 	const { version, changed } = applyCapture(storeRoot, bucketId, index, { seriesId, relPath, content, isBinary }, now);
 	if (changed) {
 		writeIndex(storeRoot, bucketId, index);
@@ -195,7 +246,7 @@ export function captureSnapshotsBatch(
 		return;
 	}
 	const bucketId = bucketIdFor(absoluteFolderPath);
-	const index = readIndex(storeRoot, bucketId);
+	const index = readMutableIndex(storeRoot, bucketId);
 
 	const activeRelPaths = new Set<string>();
 	for (const versions of Object.values(index.series)) {
@@ -277,7 +328,7 @@ export function pruneOlderThan(
 	now: Date = new Date(),
 ): number {
 	const bucketId = bucketIdFor(absoluteFolderPath);
-	const index = readIndex(storeRoot, bucketId);
+	const index = readMutableIndex(storeRoot, bucketId);
 	const cutoff = now.getTime() - maxAgeDays * 24 * 60 * 60 * 1000;
 
 	let prunedCount = 0;

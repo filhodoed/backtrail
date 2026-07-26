@@ -51,6 +51,11 @@
         "command": "backtrail.markFolderSeen",
         "title": "Mark All Changes As Seen",
         "category": "Backtrail"
+      },
+      {
+        "command": "backtrail.pruneNow",
+        "title": "Prune Now",
+        "category": "Backtrail"
       }
     ],
     "viewsContainers": {
