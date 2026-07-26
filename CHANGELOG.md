@@ -4,6 +4,13 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-26
+
+### Added
+
+- New **`backtrail.captureDebounceSeconds`** setting (default 15s) — consecutive saves of an already-tracked file within this quiet window now collapse into a single version, instead of planting one version per save. The main mitigation for files saved constantly in a short span (a session transcript, a log).
+- New **`backtrail.maxVersionsPerSeries`** setting (default 100) — a file's history now keeps at most this many versions, discarding the oldest on the next prune regardless of age. The backstop for a file saved many times in a single day, which age-based retention alone can't catch.
+
 ## [0.7.0] - 2026-07-26
 
 ### Added
