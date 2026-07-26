@@ -10,7 +10,7 @@
 mof_meta:
   system_name: "Backtrail"
   purpose: "Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais."
-  version: "0.1.1"
+  version: "0.2.0"
   last_updated: "2026-07-26"
   owners: ["Edson Junior (filhodoed)"]
   domains:
@@ -167,7 +167,7 @@ functions:
     status: "verified"
     responsibilities:
       - "Instanciar e registrar as três tree views, o decoration provider e todos os comandos"
-      - "Iniciar um watcher por pasta rastreada persistida e rodar prune de retenção uma vez por ativação"
+      - "Iniciar um watcher por pasta rastreada persistida e rodar prune de retenção + hardening de permissões (hardenBucketPermissions) uma vez por ativação"
       - "Coordenar callbacks de ciclo de vida (onFolderTracked/onFolderUntracked) entre comandos, watchers e views"
       - "Disparar baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)"
       - "Marcar arquivo ativo como visto a cada troca de editor"
@@ -194,6 +194,8 @@ functions:
           "F_WATCH",
           "F_BASELINE",
           "F_PRUNE",
+          "F_DELETE_BUCKET",
+          "F_STORE_QUERY",
           "F_REGISTRY",
           "F_SEEN",
           "F_HISTORY_VIEW",
@@ -212,6 +214,7 @@ functions:
     notes:
       - "Falha ao iniciar watcher de pasta inacessível não aborta a ativação (try/catch em startWatching)"
       - "Watcher inicia ANTES do baseline scan de propósito — edits reais durante o scan não podem ser perdidos; captureSnapshotsBatch resolve a corrida"
+      - "untrackAndForget (cancelamento de baseline) chama F_DELETE_BUCKET incondicionalmente, sem perguntar — esse caminho já significa 'desfazer o rastreio inteiro' (Fase 1 de hardening, 26/07)"
 
   - id: "F_REGISTRY"
     name: "Registro de Pastas Rastreadas"
@@ -300,7 +303,7 @@ functions:
       - "Comando backtrail.untrackFolder: remover do registro, parar watcher (via callback), oferecer remoção da pasta do Explorer"
       - "Variante untrackAndForget (interna a F_ACTIVATE): usada quando o usuário cancela o baseline — desfaz o rastreamento inteiro sem perguntar"
     non_responsibilities:
-      - "NÃO apaga snapshots já capturados do storeRoot — o histórico da pasta permanece no disco. DECISÃO (Edson, 2026-07-26): isso deve mudar — untrack deve disparar prune automático do bucket da pasta; implementação pendente (ver Regras Transversais § Decisões registradas)"
+      - "Stop Tracking manual não apaga o bucket automaticamente — pergunta via warning prompt (fire-and-forget, não bloqueia o untrack em si); untrackAndForget (cancelamento de baseline) apaga incondicionalmente, sem perguntar, pois esse caminho já significa 'desfazer tudo'. Decisão do owner de 26/07 implementada em 2026-07-26 (Fase 1 de hardening)."
     entities: ["PastaRastreada"]
     interfaces:
       code_ref: "src/trackedFoldersCommands.ts:untrackFolderCommand + src/extension.ts:untrackAndForget"
@@ -315,9 +318,10 @@ functions:
         events_consumed: []
         external_calls: ["VS Code API (updateWorkspaceFolders)"]
     boundaries:
-      depends_on: ["F_REGISTRY"]
+      depends_on: ["F_REGISTRY", "F_DELETE_BUCKET"]
       exposed_to: ["usuário (comando VS Code)", "F_ACTIVATE"]
-    notes: []
+    notes:
+      - "A pergunta de exclusão de histórico é assíncrona e não é aguardada pelo comando — evita que um teste de integração headless trave esperando resposta de UI; o untrack em si (globalState) sempre completa de imediato, como antes."
 
   - id: "F_GIT_GUARD"
     name: "Bloquear Pastas em Repositório Git"
@@ -474,7 +478,8 @@ functions:
       exposed_to: ["F_WATCH", "F_BASELINE"]
     notes:
       - "bucketId = sha256(realpathSync(pasta)) — symlinks para a mesma pasta caem no mesmo bucket"
-      - "Índice corrompido é tratado como vazio (crash mid-write não trava o bucket para sempre)"
+      - "writeIndex grava em .tmp e faz rename atômico; a versão anterior válida vira index.json.bak antes do rename — crash mid-write não corrompe mais o index.json em uso (Fase 1 de hardening, 26/07)"
+      - "Novos buckets/índices/blobs nascem em 0700/0600 (antes 0755/0644) — ver hardenBucketPermissions em F_STORE_QUERY para o sweep de buckets legados"
 
   - id: "F_STORE_QUERY"
     name: "Consultar Histórico do Store"
@@ -488,7 +493,7 @@ functions:
       - "NÃO escreve nada no store"
     entities: ["SérieDeVersões", "Blob"]
     interfaces:
-      code_ref: "src/snapshotStore.ts:listVersions,readSnapshotContent,findActiveSeriesId,listActiveFiles"
+      code_ref: "src/snapshotStore.ts:listVersions,readSnapshotContent,findActiveSeriesId,listActiveFiles,hardenBucketPermissions"
       inputs:
         - "storeRoot, absoluteFolderPath, seriesId|relPath"
       outputs:
@@ -511,9 +516,11 @@ functions:
           "F_SEEN",
           "F_DIFF",
           "F_RESTORE",
+          "F_ACTIVATE (hardenBucketPermissions, uma vez por bucket, marcada por sentinel .permissions-hardened)",
         ]
     notes:
       - "É o maior fan-in do sistema: qualquer mudança de semântica aqui atravessa quase toda a UI"
+      - "readSnapshotContent verifica sha256 do blob lido contra version.contentHash e lança erro em mismatch (Fase 1 de hardening, 26/07) — F_DIFF e F_RESTORE capturam e mostram mensagem, não deixam a exceção crua propagar"
 
   - id: "F_PRUNE"
     name: "Aplicar Retenção de Snapshots"
@@ -541,7 +548,36 @@ functions:
       depends_on: []
       exposed_to: ["F_ACTIVATE"]
     notes:
-      - "Única função que DELETA dados do store — mudanças aqui têm risco de perda de histórico"
+      - "Única função que DELETA dados PARCIALMENTE (por idade) — ver F_DELETE_BUCKET para exclusão total de um bucket"
+
+  - id: "F_DELETE_BUCKET"
+    name: "Apagar Histórico Completo de uma Pasta"
+    type: "Domain Service"
+    domain: "Armazenamento"
+    status: "verified"
+    responsibilities:
+      - "Remover o bucket inteiro (index.json, .bak, blobs/) de uma pasta rastreada — rmSync recursivo, no-op se o bucket não existir"
+    non_responsibilities:
+      - "NÃO decide QUANDO apagar nem SE deve confirmar com o usuário — isso é responsabilidade do caller (F_UNTRACK_FOLDER pergunta; untrackAndForget em F_ACTIVATE apaga sem perguntar)"
+    entities: ["SérieDeVersões", "Blob"]
+    interfaces:
+      code_ref: "src/snapshotStore.ts:deleteBucket"
+      inputs:
+        - "storeRoot, absoluteFolderPath"
+      outputs:
+        - "void"
+      state: "stateless"
+      side_effects:
+        database: "remoção física recursiva de storeRoot/{bucketId}/"
+        events_published: []
+        events_consumed: []
+        external_calls: []
+    boundaries:
+      depends_on: []
+      exposed_to: ["F_UNTRACK_FOLDER", "F_ACTIVATE (untrackAndForget)"]
+    notes:
+      - "Adicionada na Fase 1 de hardening (26/07) — implementa a decisão do owner de que untrack deve poder apagar o histórico da pasta, em vez de deixá-lo órfão no storeRoot para sempre"
+      - "Junto com F_PRUNE, é a segunda função que DELETA dados do store — irreversível, sem teste de regressão não se mexe aqui"
 
   - id: "F_IGNORE"
     name: "Filtrar Arquivos Ignorados"
@@ -549,10 +585,10 @@ functions:
     domain: "Captura"
     status: "verified"
     responsibilities:
-      - "Decidir se um relPath deve ser ignorado: tamanho > maxFileSizeMB, segmento de pasta em ignoredFolders (qualquer profundidade), extensão em ignoredExtensions"
-      - "Ler configuração do usuário (backtrail.* em settings) com defaults: node_modules/.git/dist/build, 50MB, sem extensões"
+      - "Decidir se um relPath deve ser ignorado: tamanho > maxFileSizeMB, segmento de pasta em ignoredFolders (qualquer profundidade), nome exato de arquivo em ignoredFiles, extensão em ignoredExtensions"
+      - "Ler configuração do usuário (backtrail.* em settings) com defaults: node_modules/.git/dist/build/restored, .env/.env.local/id_rsa/id_ed25519/.npmrc/.netrc, 50MB, sem extensões (defaults atualizados na Fase 1 de hardening, 26/07)"
     non_responsibilities:
-      - "NÃO suporta globs — matching é por nome exato de segmento e extensão"
+      - "NÃO suporta globs — matching é por nome exato de segmento, nome de arquivo e extensão"
     entities: []
     interfaces:
       code_ref: "src/ignoreFilters.ts:shouldIgnore + src/config.ts:getIgnoreConfig,getRetentionDays"
@@ -576,6 +612,7 @@ functions:
         ]
     notes:
       - "Config é lida no momento em que o watcher é criado — mudanças em settings só valem para watchers novos (reativação)"
+      - "ignoredFiles existe porque dotfiles como .env não têm extensão pela própria regra de extensionOf (ponto inicial não conta como separador) — o filtro por extensão nunca os alcançaria"
 
   - id: "F_BINARY"
     name: "Detectar Conteúdo Binário"
@@ -874,7 +911,8 @@ functions:
       depends_on: ["F_STORE_QUERY"]
       exposed_to: ["usuário (context menu backtrail.restoreVersion)"]
     notes:
-      - "DECISÃO (Edson, 2026-07-26): todo diretório restored/ deve nascer FORA do tracking — restaurações não entram no histórico. Comportamento atual diverge: restored/ não está nos ignoredFolders e o watcher captura cada restauração como série nova. Implementação pendente (ver Regras Transversais § Decisões registradas)."
+      - "restored/ está em DEFAULT_IGNORED_FOLDERS (F_IGNORE) desde 2026-07-26 (Fase 1 de hardening) — restaurações não entram mais no histórico. Decisão do owner de 26/07 implementada."
+      - "readSnapshotContent (F_STORE_QUERY) verifica sha256 do blob contra o hash gravado — mismatch lança erro; showDiff/restoreVersion capturam e mostram mensagem clara em vez de propagar exceção crua."
 ```
 
 ## Entidades
@@ -1370,8 +1408,20 @@ impact_rules:
     impact_type: "behavioral"
     risk: "high"
     recommended_actions:
-      - "Única função que apaga dados. Um bug aqui é perda de histórico irrecuperável — teste de regressão obrigatório para qualquer mudança"
+      - "Única função que apaga dados PARCIALMENTE. Um bug aqui é perda de histórico irrecuperável — teste de regressão obrigatório para qualquer mudança"
       - "GC só pode remover blob cujo hash não é referenciado por NENHUMA série remanescente"
+
+  - id: "IR_011"
+    trigger:
+      function_id: "F_DELETE_BUCKET"
+      change: "comportamento — critério de quando apagar (quem confirma, quem não confirma)"
+    affected_direct: ["F_UNTRACK_FOLDER", "F_ACTIVATE"]
+    affected_indirect: ["F_STORE_QUERY (bucket some inteiro, não parcialmente)"]
+    impact_type: "behavioral"
+    risk: "high"
+    recommended_actions:
+      - "Apaga o bucket INTEIRO, não parcialmente como F_PRUNE — irreversível, sem lixeira. Teste de regressão obrigatório (ver test/unit/snapshotStore.test.ts: should_delete_the_whole_bucket_for_a_tracked_folder)"
+      - "Preservar a assimetria de confirmação: Stop Tracking manual pergunta antes (warning prompt fire-and-forget); untrackAndForget (cancelamento de baseline) apaga sem perguntar, pois esse caminho já significa 'desfazer tudo'. Trocar essa assimetria por engano remove a única rede de segurança contra perda acidental de histórico"
 
   - id: "IR_007"
     trigger:
@@ -1442,12 +1492,12 @@ impact_rules:
 - **Resiliência de índice:** index.json corrompido (crash mid-write, duas janelas concorrentes) é tratado como vazio e substituído na próxima escrita. Não há lock entre janelas do VS Code — duas janelas gravando no mesmo bucket podem perder escritas (last-writer-wins), limitação conhecida e aceita.
 - **Prune só na ativação:** retenção roda uma vez por pasta na ativação, não em timer (`ponytail:` em extension.ts:17). Janela deixada aberta por semanas não aplica retenção até reativar.
 
-### Decisões registradas (2026-07-26, pendentes de implementação)
+### Decisões registradas (2026-07-26) — implementadas na Fase 1 de hardening
 
-Respostas do owner às perguntas em aberto do bootstrap — regras de produto verificadas, ainda não refletidas no código:
+Respostas do owner às perguntas em aberto do bootstrap — implementadas em 2026-07-26 (branch `feat/store-hardening`):
 
-1. **`restored/` nasce fora do tracking.** Restaurações não devem entrar no histórico. Caminho provável: incluir `restored` nos `ignoredFolders` default (F_IGNORE) — aciona IR_007; alternativa é filtrar no watcher/baseline. Afeta F_RESTORE, F_WATCH, F_BASELINE.
-2. **Untrack dispara prune automático.** Ao deixar de rastrear uma pasta, seu bucket no storeRoot deve ser removido — nada de acúmulo órfão. Afeta F_UNTRACK_FOLDER (e `untrackAndForget` em F_ACTIVATE); toca F_PRUNE/IR_006 (única superfície que deleta dados — teste de regressão obrigatório). Atenção: o cancelamento do baseline usa `untrackAndForget`, então o prune automático ali é o comportamento desejado (desfazer tudo), mas o `Stop Tracking` manual apaga histórico irrecuperável — considerar confirmação do usuário antes de apagar.
+1. **`restored/` nasce fora do tracking.** ✅ Implementado: `restored` está em `DEFAULT_IGNORED_FOLDERS` (F_IGNORE). Afetou F_RESTORE, F_WATCH, F_BASELINE.
+2. **Untrack dispara prune automático.** ✅ Implementado com a assimetria de confirmação que o owner sinalizou como necessária: `Stop Tracking` manual pergunta antes de apagar (F_UNTRACK_FOLDER, warning prompt); `untrackAndForget` do cancelamento de baseline (F_ACTIVATE) apaga sem perguntar. Nova função F_DELETE_BUCKET (IR_011) faz a exclusão em si; F_PRUNE (IR_006) continua sendo a exclusão parcial por idade.
 
 ## Perguntas em Aberto
 
@@ -1461,3 +1511,4 @@ open_questions: [] # perguntas do bootstrap respondidas em 2026-07-26 — ver Re
 | ------ | ---------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                             |
 | 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação |
+| 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas |
