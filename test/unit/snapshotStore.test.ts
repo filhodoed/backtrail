@@ -241,6 +241,47 @@ test('should_remove_series_entirely_when_all_its_versions_are_pruned', (t) => {
 	assert.equal(seriesId, undefined);
 });
 
+test('should_cap_a_series_to_the_configured_max_versions_keeping_the_most_recent', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	for (let i = 0; i < 5; i++) {
+		captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from(`v${i}`), false, daysAgo(1));
+	}
+
+	const prunedCount = pruneOlderThan(storeRoot, folder, 45, new Date(), 3);
+	const remaining = listVersions(storeRoot, folder, 'series-1');
+
+	assert.equal(prunedCount, 2);
+	assert.equal(remaining.length, 3);
+	assert.deepEqual(
+		remaining.map((v) => v.sizeBytes),
+		[2, 3, 4].map((i) => Buffer.from(`v${i}`).byteLength),
+	);
+});
+
+test('should_remove_blob_orphaned_by_the_version_cap', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(
+		storeRoot,
+		folder,
+		'series-1',
+		'notas.md',
+		Buffer.from('versão descartada pelo cap'),
+		false,
+		daysAgo(1),
+	);
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('versão mantida'), false, daysAgo(1));
+
+	pruneOlderThan(storeRoot, folder, 45, new Date(), 1);
+	const blobFiles = readdirSync(join(storeRoot, bucketId, 'blobs'));
+
+	assert.equal(blobFiles.length, 1);
+});
+
 test('should_treat_a_corrupt_index_as_empty_instead_of_throwing', (t) => {
 	const storeRoot = makeTempDir(t, 'backtrail-store-');
 	const folder = makeTempDir(t, 'backtrail-folder-');
