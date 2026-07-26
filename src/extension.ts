@@ -14,10 +14,14 @@ import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
 import { TrackedFoldersProvider } from './trackedFoldersProvider';
 import { listTrackedFolders, untrackFolder } from './trackedFolders';
 
-// ponytail: prunes once per activation only, not on a periodic timer — fine
-// for a session that restarts daily, but a VS Code window left open for
-// weeks won't see the retention window enforced until reactivated. Add a
-// setInterval sweep if that turns out to matter in practice.
+export const PRUNE_NOW_COMMAND = 'backtrail.pruneNow';
+
+// A VS Code window can stay open for weeks — pruning only on activation
+// means retention is effectively unbounded for a long-lived session. This
+// interval is deliberately coarse (once a day is plenty for a days-based
+// retention setting) and runs alongside the manual "Backtrail: Prune Now"
+// command below for anyone who doesn't want to wait.
+const PERIODIC_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export interface BacktrailApi {
 	globalState: vscode.Memento;
@@ -190,7 +194,33 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		changesProvider.refresh(),
 	);
 
+	function pruneAllTrackedFolders(): number {
+		const retentionDays = getRetentionDays();
+		let prunedCount = 0;
+		for (const folder of listTrackedFolders(context.globalState)) {
+			try {
+				prunedCount += pruneOlderThan(storeRoot, folder, retentionDays);
+			} catch {
+				// Same tolerance as startWatching: a folder that's gone shouldn't
+				// stop the sweep for every other tracked folder.
+			}
+		}
+		return prunedCount;
+	}
+
+	const periodicPrune = setInterval(pruneAllTrackedFolders, PERIODIC_PRUNE_INTERVAL_MS);
+
 	context.subscriptions.push(
+		vscode.commands.registerCommand(PRUNE_NOW_COMMAND, () => {
+			const prunedCount = pruneAllTrackedFolders();
+			changesProvider.refresh();
+			void vscode.window.showInformationMessage(
+				prunedCount === 0
+					? 'backtrail: nothing to prune — no snapshots older than the retention window.'
+					: `backtrail: pruned ${prunedCount} snapshot${prunedCount === 1 ? '' : 's'} older than the retention window.`,
+			);
+		}),
+		new vscode.Disposable(() => clearInterval(periodicPrune)),
 		new vscode.Disposable(() => {
 			for (const watcher of watchers.values()) {
 				watcher.dispose();
