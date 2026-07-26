@@ -4,10 +4,12 @@ Regras locais sobrescreve standards, exceto segurança/arquitetura.
 
 ## Padrões Base
 
+<!-- prettier-ignore -->
 @../../../Library/Mobile Documents/com~apple~CloudDocs/Claude/workspace/CLAUDE.md
 
 ## Substância do Projeto
 
+<!-- prettier-ignore -->
 @../../../Library/Mobile Documents/com~apple~CloudDocs/Claude/workspace/projects/backtrail/CLAUDE.md
 
 ## Map of Functions

@@ -117,7 +117,13 @@ interface ApplyCaptureResult {
 	changed: boolean;
 }
 
-function applyCapture(storeRoot: string, bucketId: string, index: StoreIndex, input: CaptureInput, now: Date): ApplyCaptureResult {
+function applyCapture(
+	storeRoot: string,
+	bucketId: string,
+	index: StoreIndex,
+	input: CaptureInput,
+	now: Date,
+): ApplyCaptureResult {
 	const { seriesId, relPath, content, isBinary } = input;
 	const contentHash = hashContent(content);
 	const versions = index.series[seriesId] ?? [];

@@ -52,7 +52,12 @@ suite('Changes Provider Integration', () => {
 			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-new', 'novo.md', Buffer.from('v1'), false);
 
 			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-changed', 'editado.md', Buffer.from('v1'), false);
-			await markFileAsSeen(api.globalState, api.storeRoot, vscode.Uri.file(join(folder, 'editado.md')), api.decorationProvider);
+			await markFileAsSeen(
+				api.globalState,
+				api.storeRoot,
+				vscode.Uri.file(join(folder, 'editado.md')),
+				api.decorationProvider,
+			);
 			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-changed', 'editado.md', Buffer.from('v2'), false);
 
 			const groups = api.changesProvider.getChildren();
@@ -77,7 +82,12 @@ suite('Changes Provider Integration', () => {
 
 		test('a file with no pending change surfaces no groups at all', async () => {
 			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-no-pending', 'notas.md', Buffer.from('v1'), false);
-			await markFileAsSeen(api.globalState, api.storeRoot, vscode.Uri.file(join(folder, 'notas.md')), api.decorationProvider);
+			await markFileAsSeen(
+				api.globalState,
+				api.storeRoot,
+				vscode.Uri.file(join(folder, 'notas.md')),
+				api.decorationProvider,
+			);
 
 			const groups = api.changesProvider.getChildren();
 
@@ -89,7 +99,14 @@ suite('Changes Provider Integration', () => {
 			await trackFolder(api.globalState, goneFolder);
 			rmSync(goneFolder, { recursive: true, force: true });
 
-			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-survivor', 'sobrevive.md', Buffer.from('v1'), false);
+			captureSnapshot(
+				api.storeRoot,
+				folder,
+				'changesprovider-series-survivor',
+				'sobrevive.md',
+				Buffer.from('v1'),
+				false,
+			);
 
 			try {
 				const groups = api.changesProvider.getChildren();

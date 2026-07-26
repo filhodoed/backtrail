@@ -84,7 +84,13 @@ suite('History Tree Provider Integration', () => {
 
 	test('returns no children for a leaf tree item', () => {
 		const children = api.historyProvider.getChildren({
-			version: { relPath: 'x.md', timestamp: new Date().toISOString(), sizeBytes: 1, isBinary: false, contentHash: 'x' },
+			version: {
+				relPath: 'x.md',
+				timestamp: new Date().toISOString(),
+				sizeBytes: 1,
+				isBinary: false,
+				contentHash: 'x',
+			},
 			folder: trackedFolder,
 			index: 0,
 		});

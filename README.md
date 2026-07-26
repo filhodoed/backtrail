@@ -44,8 +44,9 @@ Requires Node 24+ — unit tests run `.ts` files directly via `node --test`, rel
 
 ```bash
 npm install
-npm test        # unit tests (node --test) + integration tests (real VS Code host)
-npm run package # builds dist/extension.js
+npm test          # unit tests (node --test) + integration tests (real VS Code host)
+npm run format    # formats src/ and test/ with prettier
+npm run package   # builds dist/extension.js
 ```
 
 Issues and PRs welcome.
