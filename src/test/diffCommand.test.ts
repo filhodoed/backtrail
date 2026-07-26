@@ -80,7 +80,10 @@ suite('Diff Command Integration', () => {
 	});
 
 	test('tree item wires the diff command when a previous version exists', () => {
-		const provider = new BacktrailHistoryProvider({ globalState: api.globalState } as vscode.ExtensionContext, api.storeRoot);
+		const provider = new BacktrailHistoryProvider(
+			{ globalState: api.globalState } as vscode.ExtensionContext,
+			api.storeRoot,
+		);
 		const element: VersionTreeItem = {
 			version: makeVersion({ timestamp: new Date().toISOString() }),
 			previousVersion: makeVersion({ timestamp: new Date(Date.now() - 1000).toISOString() }),
@@ -94,7 +97,10 @@ suite('Diff Command Integration', () => {
 	});
 
 	test('tree item wires the diff command against an empty original for the first version in a series', () => {
-		const provider = new BacktrailHistoryProvider({ globalState: api.globalState } as vscode.ExtensionContext, api.storeRoot);
+		const provider = new BacktrailHistoryProvider(
+			{ globalState: api.globalState } as vscode.ExtensionContext,
+			api.storeRoot,
+		);
 		const element: VersionTreeItem = {
 			version: makeVersion({}),
 			previousVersion: undefined,
@@ -109,7 +115,14 @@ suite('Diff Command Integration', () => {
 	});
 
 	test('shows a diff against an empty original when the file has no previous version', async () => {
-		const first = captureSnapshot(api.storeRoot, folder, 'diff-test-series-first', 'nova.md', Buffer.from('conteudo inicial'), false);
+		const first = captureSnapshot(
+			api.storeRoot,
+			folder,
+			'diff-test-series-first',
+			'nova.md',
+			Buffer.from('conteudo inicial'),
+			false,
+		);
 
 		await vscode.commands.executeCommand(SHOW_DIFF_COMMAND, folder, undefined, first);
 		await waitUntil(() => findDiffTab() !== undefined);
@@ -122,7 +135,10 @@ suite('Diff Command Integration', () => {
 	});
 
 	test('tree item wires the version-info command for non-diffable binaries', () => {
-		const provider = new BacktrailHistoryProvider({ globalState: api.globalState } as vscode.ExtensionContext, api.storeRoot);
+		const provider = new BacktrailHistoryProvider(
+			{ globalState: api.globalState } as vscode.ExtensionContext,
+			api.storeRoot,
+		);
 		const element: VersionTreeItem = {
 			version: makeVersion({ relPath: 'video.mp4', isBinary: true }),
 			previousVersion: makeVersion({ relPath: 'video.mp4', isBinary: true }),
