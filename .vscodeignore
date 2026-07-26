@@ -11,6 +11,9 @@ esbuild.js
 vsc-extension-quickstart.md
 CLAUDE.md
 .github/**
+docs/**
+.prettierignore
+.prettierrc.json
 media/marketplace-icon.svg
 media/publisher-logo.svg
 media/publisher-logo.png
