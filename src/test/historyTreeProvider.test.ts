@@ -32,8 +32,15 @@ suite('History Tree Provider Integration', () => {
 	setup(async () => {
 		trackedFolder = mkdtempSync(join(tmpdir(), 'backtrail-history-folder-'));
 		await trackFolder(api.globalState, trackedFolder);
-		watcherDisposable = watchTrackedFolder(trackedFolder, api.storeRoot, undefined, (uri) =>
-			api.historyProvider.notifyChange(uri),
+		// Debounce off: these tests assert on immediate second-capture behavior
+		// (diffing consecutive saves), not on the debounce feature itself — see
+		// fileWatcher.test.ts's dedicated "File Watcher Debounce" suite for that.
+		watcherDisposable = watchTrackedFolder(
+			trackedFolder,
+			api.storeRoot,
+			undefined,
+			(uri) => api.historyProvider.notifyChange(uri),
+			0,
 		);
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 	});

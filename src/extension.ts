@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { ChangesProvider } from './changesProvider';
 import { registerOpenChangedFileCommand } from './changesCommands';
 import { registerCommands } from './commands';
-import { getIgnoreConfig, getRetentionDays } from './config';
+import { getCaptureDebounceSeconds, getIgnoreConfig, getMaxVersionsPerSeries, getRetentionDays } from './config';
 import { createDecorationProvider, markFileAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { registerDiffCommand } from './diffCommand';
 import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
@@ -82,21 +82,27 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		}
 		try {
 			hardenBucketPermissions(storeRoot, folder);
-			pruneOlderThan(storeRoot, folder, getRetentionDays());
+			pruneOlderThan(storeRoot, folder, getRetentionDays(), new Date(), getMaxVersionsPerSeries());
 			watchers.set(
 				folder,
-				watchTrackedFolder(folder, storeRoot, getIgnoreConfig(), (uri) => {
-					historyProvider.notifyChange(uri);
-					decorationProvider.refresh(uri);
-					changesProvider.refresh();
-					if (vscode.window.activeTextEditor?.document.uri.fsPath === uri.fsPath) {
-						void markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider)
-							.then(() => changesProvider.refresh())
-							.catch(() => {
-								// Same fire-and-forget rationale as handleActiveEditorChange above.
-							});
-					}
-				}),
+				watchTrackedFolder(
+					folder,
+					storeRoot,
+					getIgnoreConfig(),
+					(uri) => {
+						historyProvider.notifyChange(uri);
+						decorationProvider.refresh(uri);
+						changesProvider.refresh();
+						if (vscode.window.activeTextEditor?.document.uri.fsPath === uri.fsPath) {
+							void markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider)
+								.then(() => changesProvider.refresh())
+								.catch(() => {
+									// Same fire-and-forget rationale as handleActiveEditorChange above.
+								});
+						}
+					},
+					getCaptureDebounceSeconds(),
+				),
 			);
 		} catch {
 			// A tracked folder that's gone (moved, deleted, unmounted drive)
@@ -196,10 +202,11 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 
 	function pruneAllTrackedFolders(): number {
 		const retentionDays = getRetentionDays();
+		const maxVersionsPerSeries = getMaxVersionsPerSeries();
 		let prunedCount = 0;
 		for (const folder of listTrackedFolders(context.globalState)) {
 			try {
-				prunedCount += pruneOlderThan(storeRoot, folder, retentionDays);
+				prunedCount += pruneOlderThan(storeRoot, folder, retentionDays, new Date(), maxVersionsPerSeries);
 			} catch {
 				// Same tolerance as startWatching: a folder that's gone shouldn't
 				// stop the sweep for every other tracked folder.

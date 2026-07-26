@@ -24,7 +24,10 @@ suite('File Watcher Integration', () => {
 	setup(async () => {
 		trackedFolder = mkdtempSync(join(tmpdir(), 'backtrail-watch-folder-'));
 		storeRoot = mkdtempSync(join(tmpdir(), 'backtrail-watch-store-'));
-		disposable = watchTrackedFolder(trackedFolder, storeRoot);
+		// Debounce off: this suite asserts on immediate second-capture behavior
+		// (renames, corruption recovery, ignore rules), not on the debounce
+		// feature itself — see the dedicated "File Watcher Debounce" suite below.
+		disposable = watchTrackedFolder(trackedFolder, storeRoot, undefined, undefined, 0);
 		// The native watcher takes a moment to actually start listening after
 		// creation; writing before it's hot means the event is missed outright,
 		// not just delayed, so no amount of waiting after the fact recovers it.
@@ -221,5 +224,59 @@ suite('File Watcher Integration', () => {
 
 		const newSeriesId = findActiveSeriesId(storeRoot, trackedFolder, 'novo-sem-relacao.md');
 		assert.notEqual(newSeriesId, originalSeriesId);
+	});
+});
+
+suite('File Watcher Debounce', () => {
+	const DEBOUNCE_MS = 300;
+
+	let trackedFolder: string;
+	let storeRoot: string;
+	let disposable: { dispose(): void };
+
+	setup(async () => {
+		trackedFolder = mkdtempSync(join(tmpdir(), 'backtrail-debounce-folder-'));
+		storeRoot = mkdtempSync(join(tmpdir(), 'backtrail-debounce-store-'));
+		disposable = watchTrackedFolder(trackedFolder, storeRoot, undefined, undefined, DEBOUNCE_MS / 1000);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+	});
+
+	teardown(() => {
+		disposable.dispose();
+		rmSync(trackedFolder, { recursive: true, force: true });
+		rmSync(storeRoot, { recursive: true, force: true });
+	});
+
+	test('consecutive saves of an already-tracked file within the debounce window collapse into one version', async () => {
+		const filePath = join(trackedFolder, 'transcript.jsonl');
+		writeFileSync(filePath, 'v1');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'transcript.jsonl') !== undefined);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'transcript.jsonl')!;
+
+		writeFileSync(filePath, 'v2');
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS / 2));
+		writeFileSync(filePath, 'v3');
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS / 2));
+		writeFileSync(filePath, 'v4-final');
+
+		await waitUntil(() => listVersions(storeRoot, trackedFolder, seriesId).length === 2, DEBOUNCE_MS + 5000);
+
+		const versions = listVersions(storeRoot, trackedFolder, seriesId);
+		assert.equal(versions.length, 2);
+		assert.equal(versions[1].sizeBytes, Buffer.from('v4-final').byteLength);
+	});
+
+	test('disposing the watcher cancels a pending debounced capture', async () => {
+		const filePath = join(trackedFolder, 'notas.md');
+		writeFileSync(filePath, 'v1');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'notas.md')!;
+
+		writeFileSync(filePath, 'v2 — nunca deveria ser capturada');
+		disposable.dispose();
+
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS + 500));
+
+		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
 	});
 });
