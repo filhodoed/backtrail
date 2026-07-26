@@ -4,6 +4,23 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-07-26
+
+### Added
+
+- New `backtrail.ignoredFiles` setting — exact file names never tracked, anywhere in a tracked folder (default: `.env`, `.env.local`, `id_rsa`, `id_ed25519`, `.npmrc`, `.netrc`).
+- Stop Tracking now offers to delete the folder's saved history.
+
+### Changed
+
+- `restored/` is now in the default ignored folders, so restoring a version doesn't immediately get captured as a new tracked file.
+- Snapshots are now stored with owner-only file permissions instead of the previous defaults; existing tracked folders are upgraded automatically the next time you open VS Code.
+
+### Fixed
+
+- A crash mid-write could truncate the on-disk history index; writes are now atomic, with an automatic backup and recovery.
+- A corrupted snapshot would previously fail silently in a diff or restore; this is now detected and reported clearly.
+
 ## [0.5.0] - 2026-07-24
 
 ### Added
