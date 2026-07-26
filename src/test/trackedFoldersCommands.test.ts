@@ -107,13 +107,25 @@ suite('Tracked Folders Commands Integration', () => {
 		try {
 			const a = captureSnapshot(api.storeRoot, folder, 'markseen-series-a', 'a.md', Buffer.from('v1'), false);
 			const b = captureSnapshot(api.storeRoot, folder, 'markseen-series-b', 'b.md', Buffer.from('v1'), false);
-			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp), 'new');
-			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp), 'new');
+			assert.equal(
+				getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp),
+				'new',
+			);
+			assert.equal(
+				getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp),
+				'new',
+			);
 
 			await vscode.commands.executeCommand(MARK_FOLDER_SEEN_COMMAND, folder);
 
-			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp), 'none');
-			assert.equal(getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp), 'none');
+			assert.equal(
+				getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp),
+				'none',
+			);
+			assert.equal(
+				getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'b.md')!, b.timestamp),
+				'none',
+			);
 		} finally {
 			await untrackFolder(api.globalState, folder);
 			rmSync(folder, { recursive: true, force: true });

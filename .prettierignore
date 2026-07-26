@@ -1,0 +1,11 @@
+node_modules
+dist
+out
+.vscode-test
+*.vsix
+package-lock.json
+CHANGELOG.md
+# @import path below relies on literal single tildes (com~apple~CloudDocs) —
+# prettier's markdown formatter misparses them as an unclosed GFM strikethrough
+# delimiter and doubles them into ~~apple~~, silently breaking the import.
+CLAUDE.md
