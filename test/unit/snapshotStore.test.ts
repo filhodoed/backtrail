@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -397,4 +406,40 @@ test('should_be_a_no_op_hardening_a_bucket_that_was_never_created', (t) => {
 	const folder = makeTempDir(t, 'backtrail-folder-');
 
 	assert.doesNotThrow(() => hardenBucketPermissions(storeRoot, folder));
+});
+
+test('should_write_the_index_without_pretty_printing_indentation', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	const raw = readFileSync(join(storeRoot, bucketId, 'index.json'), 'utf8');
+
+	assert.equal(raw.includes('\n'), false);
+});
+
+test('should_pick_up_an_index_written_by_another_window_instead_of_a_stale_in_memory_copy', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	// Warm this process's in-memory cache for the bucket.
+	assert.equal(listVersions(storeRoot, folder, 'series-1').length, 1);
+
+	// Simulate a second VS Code window writing the same bucket's index
+	// directly (bypassing this process's writeIndex/cache entirely).
+	const indexPath = join(storeRoot, bucketId, 'index.json');
+	const externallyWritten = {
+		series: {
+			'series-1': [
+				{ relPath: 'notas.md', timestamp: new Date().toISOString(), sizeBytes: 2, isBinary: false, contentHash: 'x' },
+				{ relPath: 'notas.md', timestamp: new Date().toISOString(), sizeBytes: 2, isBinary: false, contentHash: 'y' },
+			],
+		},
+	};
+	writeFileSync(indexPath, JSON.stringify(externallyWritten));
+
+	assert.equal(listVersions(storeRoot, folder, 'series-1').length, 2);
 });
