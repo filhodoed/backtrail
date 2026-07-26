@@ -4,6 +4,17 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-26
+
+### Added
+
+- New **"Backtrail: Prune Now"** command — apply the retention window across every tracked folder on demand, instead of waiting for the extension to reactivate.
+- Retention now also runs automatically once a day in the background, so a VS Code window left open for weeks no longer skips cleanup until it's restarted.
+
+### Changed
+
+- The history index is now cached in memory and written in a more compact format, making the Explorer badges and the History/Changes panels noticeably faster on large tracked folders.
+
 ## [0.6.0] - 2026-07-26
 
 ### Added
