@@ -18,8 +18,19 @@ export function registerRestoreCommand(context: vscode.ExtensionContext, storeRo
 	);
 }
 
-function restoreVersion(storeRoot: string, folder: string, version: SnapshotVersion): string {
-	const content = readSnapshotContent(storeRoot, folder, version);
+function restoreVersion(storeRoot: string, folder: string, version: SnapshotVersion): string | undefined {
+	let content: Buffer;
+	try {
+		content = readSnapshotContent(storeRoot, folder, version);
+	} catch (error) {
+		// readSnapshotContent throws on a content-hash mismatch (corrupted
+		// blob) — surface it instead of restoring garbage or crashing silently.
+		void vscode.window.showErrorMessage(
+			`backtrail: couldn't restore that version — ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return undefined;
+	}
+
 	const destination = writeRestoredFile(folder, version.relPath, new Date(version.timestamp), content);
 
 	void vscode.window

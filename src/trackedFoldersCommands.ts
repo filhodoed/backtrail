@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import * as vscode from 'vscode';
 import { markFolderAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { isInsideGitRepo } from './gitGuard';
+import { deleteBucket } from './snapshotStore';
 import { trackFolder, untrackFolder } from './trackedFolders';
 
 export const ADD_FOLDER_COMMAND = 'backtrail.addFolder';
@@ -25,7 +26,7 @@ export function registerTrackedFoldersCommands(
 		),
 		vscode.commands.registerCommand(ADD_FOLDER_BY_PATH_COMMAND, () => addFolderByPathCommand(context, onFolderTracked)),
 		vscode.commands.registerCommand(UNTRACK_FOLDER_COMMAND, (folder: string) =>
-			untrackFolderCommand(context, folder, onFolderUntracked),
+			untrackFolderCommand(context, storeRoot, folder, onFolderUntracked),
 		),
 		vscode.commands.registerCommand(MARK_FOLDER_SEEN_COMMAND, async (folder: string) => {
 			await markFolderAsSeen(context.globalState, storeRoot, folder, decorationProvider);
@@ -145,6 +146,7 @@ async function addFolderByPathCommand(
 
 async function untrackFolderCommand(
 	context: vscode.ExtensionContext,
+	storeRoot: string,
 	folder: string,
 	onFolderUntracked: (folder: string) => void,
 ): Promise<void> {
@@ -152,20 +154,38 @@ async function untrackFolderCommand(
 		await untrackFolder(context.globalState, folder);
 		onFolderUntracked(folder);
 
+		// Untracking a folder never deletes its saved history by itself — that
+		// would turn one click into an irreversible data loss with no chance to
+		// back out. Ask, and only delete on an explicit choice. Fire-and-forget
+		// (not awaited) so the command itself still completes immediately, same
+		// as before this history question existed.
+		const deleteAction = 'Delete Saved History';
+		const keepHistoryAction = 'Keep Saved History';
+		void vscode.window
+			.showWarningMessage(
+				`backtrail: stopped tracking "${basename(folder)}". Delete its saved history too? This can't be undone.`,
+				deleteAction,
+				keepHistoryAction,
+			)
+			.then((choice) => {
+				if (choice === deleteAction) {
+					deleteBucket(storeRoot, folder);
+				}
+			});
+
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);
 
 		if (index === -1) {
-			void vscode.window.showInformationMessage(`backtrail: stopped tracking "${basename(folder)}".`);
 			return;
 		}
 
 		const removeAction = 'Remove from tree';
-		const keepAction = 'Keep in tree';
+		const keepTreeAction = 'Keep in tree';
 		const choice = await vscode.window.showInformationMessage(
-			`backtrail: stopped tracking "${basename(folder)}". Also remove it from your Explorer tree?`,
+			`backtrail: also remove "${basename(folder)}" from your Explorer tree?`,
 			removeAction,
-			keepAction,
+			keepTreeAction,
 		);
 		if (choice === removeAction) {
 			vscode.workspace.updateWorkspaceFolders(index, 1);

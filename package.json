@@ -127,9 +127,25 @@
             "node_modules",
             ".git",
             "dist",
-            "build"
+            "build",
+            "restored"
           ],
           "description": "Folder names never tracked, at any depth inside a tracked folder."
+        },
+        "backtrail.ignoredFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".env",
+            ".env.local",
+            "id_rsa",
+            "id_ed25519",
+            ".npmrc",
+            ".netrc"
+          ],
+          "description": "Exact file names never tracked, anywhere in a tracked folder (e.g. local secrets)."
         },
         "backtrail.ignoredExtensions": {
           "type": "array",

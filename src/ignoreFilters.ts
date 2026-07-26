@@ -1,10 +1,17 @@
 export interface IgnoreConfig {
 	ignoredFolders: string[];
+	ignoredFiles: string[];
 	ignoredExtensions: string[];
 	maxFileSizeBytes: number;
 }
 
-export const DEFAULT_IGNORED_FOLDERS = ['node_modules', '.git', 'dist', 'build'];
+export const DEFAULT_IGNORED_FOLDERS = ['node_modules', '.git', 'dist', 'build', 'restored'];
+
+// Dotfiles like `.env` have no extension by extensionOf's own rule (a leading
+// dot isn't a real extension separator — see below), so the extension filter
+// can never catch them. These are the common local-secret filenames that
+// land in a tracked folder without the user ever meaning to version them.
+export const DEFAULT_IGNORED_FILES = ['.env', '.env.local', 'id_rsa', 'id_ed25519', '.npmrc', '.netrc'];
 export const DEFAULT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 
 function splitSegments(relPath: string): string[] {
@@ -31,6 +38,11 @@ export function shouldIgnore(relPath: string, sizeBytes: number, config: IgnoreC
 	}
 
 	const fileName = segments[segments.length - 1] ?? '';
+	const ignoredFiles = new Set(config.ignoredFiles);
+	if (ignoredFiles.has(fileName)) {
+		return true;
+	}
+
 	const extension = extensionOf(fileName);
 	if (extension) {
 		const ignoredExtensions = new Set(config.ignoredExtensions.map((ext) => ext.toLowerCase()));

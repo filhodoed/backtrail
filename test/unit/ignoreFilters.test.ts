@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+	DEFAULT_IGNORED_FILES,
 	DEFAULT_IGNORED_FOLDERS,
 	DEFAULT_MAX_FILE_SIZE_BYTES,
 	shouldIgnore,
@@ -9,6 +10,7 @@ import {
 
 const baseConfig: IgnoreConfig = {
 	ignoredFolders: DEFAULT_IGNORED_FOLDERS,
+	ignoredFiles: DEFAULT_IGNORED_FILES,
 	ignoredExtensions: ['.log', '.tmp'],
 	maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES,
 };
@@ -75,6 +77,30 @@ test('should_not_ignore_file_at_exactly_max_size', () => {
 
 test('should_handle_windows_style_path_separators', () => {
 	const result = shouldIgnore('node_modules\\left-pad\\index.js', 100, baseConfig);
+
+	assert.equal(result, true);
+});
+
+test('should_ignore_a_dotfile_with_no_extension_that_is_on_the_ignored_files_list', () => {
+	const result = shouldIgnore('.env', 100, baseConfig);
+
+	assert.equal(result, true);
+});
+
+test('should_ignore_an_ignored_file_nested_inside_a_subfolder', () => {
+	const result = shouldIgnore('config/nested/.env', 100, baseConfig);
+
+	assert.equal(result, true);
+});
+
+test('should_not_ignore_a_file_whose_name_only_partially_matches_an_ignored_file', () => {
+	const result = shouldIgnore('.env.production', 100, baseConfig);
+
+	assert.equal(result, false);
+});
+
+test('should_ignore_file_inside_a_restored_folder_by_default', () => {
+	const result = shouldIgnore('restored/notas.restored-2026-07-26-1200.md', 100, baseConfig);
 
 	assert.equal(result, true);
 });
