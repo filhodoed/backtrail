@@ -10,7 +10,7 @@
 mof_meta:
   system_name: 'Backtrail'
   purpose: 'Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais.'
-  version: '0.5.0'
+  version: '0.6.0'
   last_updated: '2026-07-27'
   owners: ['Edson Junior (filhodoed)']
   domains: ['Rastreamento', 'Captura', 'Armazenamento', 'Visualização', 'Restauração']
@@ -67,6 +67,7 @@ functions:
       - 'Coordenar callbacks de ciclo de vida (onFolderTracked/onFolderUntracked) entre comandos, watchers e views'
       - 'Disparar baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)'
       - 'Marcar arquivo ativo como visto a cada troca de editor'
+      - 'Reiniciar o watcher de uma única pasta quando um caminho dela é excluído (onExclusionChanged, Fase 5, 27/07) — mesma mecânica de restart usada por onFolderTracked/onFolderUntracked, mas escopada a uma pasta só'
     non_responsibilities:
       - 'NÃO contém lógica de captura, armazenamento ou filtragem — só orquestra'
     entities: ['PastaRastreada']
@@ -102,6 +103,9 @@ functions:
           'F_TRACK_FOLDER',
           'F_UNTRACK_FOLDER',
           'F_IGNORE',
+          'F_EXCLUDED_PATHS',
+          'F_MONITOR_VIEW',
+          'F_STOP_TRACKING_PATH',
         ]
       exposed_to: ['VS Code (entry point)', 'testes de integração via BacktrailApi']
     notes:
@@ -150,6 +154,35 @@ functions:
         ]
     notes:
       - 'KeyValueStore é a interface que permite testes unitários sem VS Code'
+
+  - id: 'F_EXCLUDED_PATHS'
+    name: 'Registro de Caminhos Excluídos por Pasta'
+    type: 'Domain Service'
+    domain: 'Rastreamento'
+    status: 'verified'
+    responsibilities:
+      - 'Listar, adicionar e remover caminhos relativos excluídos, por pasta rastreada, em globalState (chave backtrail.excludedPaths — Record<folder, relPath[]>)'
+    non_responsibilities:
+      - 'NÃO decide se um relPath cai sob um prefixo excluído — isso é de F_IGNORE (matching) e F_MONITOR_VIEW (exibição do checkbox)'
+      - 'NÃO purga histórico já capturado nem reinicia watchers — isso é de F_STOP_TRACKING_PATH'
+    entities: ['CaminhosExcluidos']
+    interfaces:
+      code_ref: 'src/excludedPaths.ts (listExcludedPaths, excludePath, includePath)'
+      inputs:
+        - 'store: KeyValueStore + folder: string + relPath: string'
+      outputs:
+        - 'string[] de relPaths excluídos para aquela pasta'
+      state: 'stateless (persistência delegada ao KeyValueStore, mesmo padrão de F_REGISTRY)'
+      side_effects:
+        database: 'globalState: backtrail.excludedPaths'
+        events_published: []
+        events_consumed: []
+        external_calls: []
+    boundaries:
+      depends_on: []
+      exposed_to: ['F_IGNORE (via getIgnoreConfigForFolder)', 'F_MONITOR_VIEW', 'F_STOP_TRACKING_PATH']
+    notes:
+      - 'Adicionada na Fase 5 (27/07), tópico 7, peça 1 — convive com backtrail.trackedFolders (F_REGISTRY) e com ignoredFolders (F_IGNORE, matching por NOME em qualquer profundidade); esta é matching por CAMINHO relativo a uma pasta específica, não substitui a outra'
 
   - id: 'F_TRACK_FOLDER'
     name: 'Rastrear Pasta'
@@ -211,6 +244,40 @@ functions:
       exposed_to: ['usuário (comando VS Code)', 'F_ACTIVATE']
     notes:
       - 'A pergunta de exclusão de histórico é assíncrona e não é aguardada pelo comando — evita que um teste de integração headless trave esperando resposta de UI; o untrack em si (globalState) sempre completa de imediato, como antes.'
+
+  - id: 'F_STOP_TRACKING_PATH'
+    name: 'Parar de Rastrear um Caminho'
+    type: 'API'
+    domain: 'Rastreamento'
+    status: 'verified'
+    responsibilities:
+      - 'Comando backtrail.stopTrackingPath (menu de contexto da view Changes) e o handler de checkbox da view Monitor: excluir um relPath (F_EXCLUDED_PATHS) e oferecer purgar seu histórico já salvo (F_PURGE_PATH)'
+      - 'Reiniciar o watcher só da pasta afetada após excluir, para a exclusão valer a partir da próxima captura sem exigir reload da janela'
+    non_responsibilities:
+      - 'Mesma assimetria de F_UNTRACK_FOLDER: excluir é imediato e incondicional; purgar o histórico salvo é perguntado à parte (fire-and-forget), pois só essa parte é irreversível'
+      - 'NÃO decide o estado do checkbox — isso é de F_MONITOR_VIEW (getTreeItem, a cada render)'
+    entities: ['CaminhosExcluidos', 'SérieDeVersões', 'Blob']
+    interfaces:
+      code_ref: 'src/pathExclusion.ts:stopTrackingPath + src/monitorCommands.ts:registerMonitorCheckboxHandler + src/changesCommands.ts:registerStopTrackingPathCommand'
+      inputs:
+        - 'globalState, storeRoot, folder: string, relPath: string, onChanged: () => void'
+      outputs:
+        - 'void (Promise) — feedback via mensagens; onChanged notifica o caller para reiniciar o watcher e atualizar as views'
+      state: 'stateless'
+      side_effects:
+        database: 'globalState: backtrail.excludedPaths (via F_EXCLUDED_PATHS) + storeRoot (via F_PURGE_PATH, se confirmado)'
+        events_published: []
+        events_consumed: []
+        external_calls:
+          [
+            'VS Code API (showWarningMessage/showInformationMessage/showErrorMessage, TreeView.onDidChangeCheckboxState)',
+          ]
+    boundaries:
+      depends_on: ['F_EXCLUDED_PATHS', 'F_PURGE_PATH']
+      exposed_to: ['usuário (comando VS Code, checkbox da view Monitor)', 'F_ACTIVATE (onExclusionChanged)']
+    notes:
+      - 'Adicionada na Fase 5 (27/07), tópico 7, peças 4 e 5 — mesmo fluxo compartilhado pelos dois pontos de entrada (checkbox e menu de contexto), para não duplicar a lógica de confirmação'
+      - 'Reincluir (marcar o checkbox de volta) não passa por aqui — é F_EXCLUDED_PATHS.includePath direto, sem diálogo, por não ser destrutivo'
 
   - id: 'F_GIT_GUARD'
     name: 'Bloquear Pastas em Repositório Git'
@@ -472,19 +539,50 @@ functions:
       - 'Adicionada na Fase 1 de hardening (26/07) — implementa a decisão do owner de que untrack deve poder apagar o histórico da pasta, em vez de deixá-lo órfão no storeRoot para sempre'
       - 'Junto com F_PRUNE, é a segunda função que DELETA dados do store — irreversível, sem teste de regressão não se mexe aqui'
 
+  - id: 'F_PURGE_PATH'
+    name: 'Purgar Histórico Sob um Caminho Excluído'
+    type: 'Domain Service'
+    domain: 'Armazenamento'
+    status: 'verified'
+    responsibilities:
+      - "Remover retroativamente as séries cujo relPath ATIVO (última versão — mesma regra de 'série ativa' de F_STORE_QUERY/IR_002) cai sob um prefixo de caminho, e fazer GC dos blobs que ficam órfãos (mesmo critério de F_PRUNE/IR_006)"
+    non_responsibilities:
+      - 'NÃO decide SE deve purgar nem pergunta ao usuário — isso é de F_STOP_TRACKING_PATH'
+      - 'NÃO apaga uma série cuja versão ATUAL já saiu do prefixo (ex.: arquivo renomeado para fora da pasta excluída) — só remove versões antigas dessa série via F_PRUNE normal, nunca via purgePath'
+    entities: ['SérieDeVersões', 'Blob']
+    interfaces:
+      code_ref: 'src/snapshotStore.ts:purgePath'
+      inputs:
+        - 'storeRoot, absoluteFolderPath, relPathPrefix: string'
+      outputs:
+        - 'number — quantidade de versões purgadas'
+      state: 'stateless'
+      side_effects:
+        database: 'storeRoot/{bucketId}/index.json (séries removidas) + storeRoot/{bucketId}/blobs/ (órfãos removidos)'
+        events_published: []
+        events_consumed: []
+        external_calls: []
+    boundaries:
+      depends_on: []
+      exposed_to: ['F_STOP_TRACKING_PATH']
+    notes:
+      - 'Adicionada na Fase 5 (27/07), tópico 7: exclusão por nome (F_IGNORE) só impede captura futura — sem isso, o que já foi capturado antes de a pasta virar excluída continuava ocupando espaço para sempre'
+      - 'Terceira função que DELETA dados do store (junto de F_PRUNE e F_DELETE_BUCKET) — irreversível, sem teste de regressão não se mexe aqui'
+      - 'A definição de "sob o prefixo" (isUnderPathPrefix) é duplicada localmente, não importada de ignoreFilters.ts — ver nota em F_IGNORE sobre a restrição do toolchain (node --test + allowImportingTsExtensions)'
+
   - id: 'F_IGNORE'
     name: 'Filtrar Arquivos Ignorados'
     type: 'Domain Service'
     domain: 'Captura'
     status: 'verified'
     responsibilities:
-      - 'Decidir se um relPath deve ser ignorado: tamanho > maxFileSizeMB, segmento de pasta em ignoredFolders (qualquer profundidade), nome exato de arquivo em ignoredFiles, extensão em ignoredExtensions'
+      - 'Decidir se um relPath deve ser ignorado: tamanho > maxFileSizeMB, segmento de pasta em ignoredFolders (qualquer profundidade), nome exato de arquivo em ignoredFiles, extensão em ignoredExtensions, ou sob um excludedPathPrefixes (Fase 5, 27/07 — matching por segmento, não string bruta)'
       - 'Ler configuração do usuário (backtrail.* em settings) com defaults: node_modules/.git/dist/build/restored, .env/.env.local/id_rsa/id_ed25519/.npmrc/.netrc, 50MB, sem extensões (defaults atualizados na Fase 1 de hardening, 26/07)'
     non_responsibilities:
       - 'NÃO suporta globs — matching é por nome exato de segmento, nome de arquivo e extensão'
-    entities: []
+    entities: ['CaminhosExcluidos']
     interfaces:
-      code_ref: 'src/ignoreFilters.ts:shouldIgnore + src/config.ts:getIgnoreConfig,getRetentionDays'
+      code_ref: 'src/ignoreFilters.ts:shouldIgnore,pathHasPrefix + src/config.ts:getIgnoreConfig,getIgnoreConfigForFolder,getRetentionDays'
       inputs:
         - 'relPath, sizeBytes, config: IgnoreConfig'
       outputs:
@@ -496,11 +594,13 @@ functions:
         events_consumed: []
         external_calls: ['VS Code workspace.getConfiguration']
     boundaries:
-      depends_on: []
+      depends_on: ['F_EXCLUDED_PATHS (via getIgnoreConfigForFolder)']
       exposed_to: ['F_WATCH', 'F_BASELINE', 'F_ACTIVATE (lê config na criação do watcher)']
     notes:
       - 'Config é lida no momento em que o watcher é criado — mudanças em settings só valem para watchers novos (reativação)'
       - 'ignoredFiles existe porque dotfiles como .env não têm extensão pela própria regra de extensionOf (ponto inicial não conta como separador) — o filtro por extensão nunca os alcançaria'
+      - 'excludedPathPrefixes (Fase 5) sofre a mesma limitação: F_ACTIVATE mitiga reiniciando só o watcher da pasta afetada (onExclusionChanged) quando o usuário exclui um caminho pelo Monitor ou pela view Changes — não resolve a limitação geral de settings.json, só a desta feature nova'
+      - 'pathHasPrefix é duplicada (não importada) em snapshotStore.ts:purgePath por restrição do toolchain — node --test exige especificador com extensão para import de valor entre módulos .ts do próprio pacote, e o tsconfig raiz não habilita allowImportingTsExtensions; as duas definições devem ficar em sincronia'
 
   - id: 'F_BINARY'
     name: 'Detectar Conteúdo Binário'
@@ -639,6 +739,37 @@ functions:
       depends_on: ['F_REGISTRY']
       exposed_to: ['F_ACTIVATE', 'usuário']
     notes: []
+
+  - id: 'F_MONITOR_VIEW'
+    name: 'Exibir e Alternar Exclusão de Caminhos'
+    type: 'UI Component'
+    domain: 'Visualização'
+    status: 'verified'
+    responsibilities:
+      - 'TreeView backtrail.monitor: uma árvore por pasta rastreada espelhando o filesystem real (sem filtro de nome/extensão — é o ponto de exclusão granular que shouldIgnore por nome não cobre), carregada sob demanda por nó'
+      - 'Checkbox por nó (exceto a raiz) refletindo se aquele relPath está excluído — direto (nele mesmo) ou por herança de um ancestral excluído — usando a mesma regra de prefixo de F_IGNORE'
+    non_responsibilities:
+      - 'NÃO decide o que acontece ao (des)marcar o checkbox — isso é de F_STOP_TRACKING_PATH (registerMonitorCheckboxHandler consome o evento e delega)'
+      - 'NÃO filtra por nome/extensão/tamanho como F_WATCH/F_BASELINE — mostra o filesystem real para o usuário poder excluir qualquer coisa'
+    entities: ['PastaRastreada', 'CaminhosExcluidos']
+    interfaces:
+      code_ref: 'src/monitorProvider.ts:MonitorProvider'
+      inputs:
+        - 'refresh()'
+      outputs:
+        - 'MonitorNode[] {folder, relPath} via TreeDataProvider; TreeItem com checkboxState'
+      state: 'stateless (relê o filesystem e o globalState a cada getChildren/getTreeItem)'
+      side_effects:
+        database: null
+        events_published: []
+        events_consumed: []
+        external_calls: ['VS Code TreeView API (readdirSync/statSync do filesystem real)']
+    boundaries:
+      depends_on: ['F_REGISTRY', 'F_EXCLUDED_PATHS']
+      exposed_to: ['F_ACTIVATE', 'usuário', 'F_STOP_TRACKING_PATH (via TreeView.onDidChangeCheckboxState)']
+    notes:
+      - 'Adicionada na Fase 5 (27/07), tópico 7, peça 4 — usa TreeItem.checkboxState nativo (disponível desde VS Code 1.72), mesmo padrão de F_TRACKED_VIEW, não é webview customizada'
+      - 'A raiz (relPath vazio, a própria pasta rastreada) não tem checkbox — excluir a pasta inteira já é o Stop Tracking (F_UNTRACK_FOLDER)'
 
   - id: 'F_DECORATE'
     name: 'Decorar Arquivos no Explorer'
@@ -795,18 +926,28 @@ functions:
 entities:
   - name: 'PastaRastreada'
     owner_domain: 'Rastreamento'
-    read_by: ['F_ACTIVATE', 'F_REGISTRY', 'F_DECORATE', 'F_SEEN', 'F_HISTORY_VIEW', 'F_CHANGES_VIEW', 'F_TRACKED_VIEW']
+    read_by:
+      [
+        'F_ACTIVATE',
+        'F_REGISTRY',
+        'F_DECORATE',
+        'F_SEEN',
+        'F_HISTORY_VIEW',
+        'F_CHANGES_VIEW',
+        'F_TRACKED_VIEW',
+        'F_MONITOR_VIEW',
+      ]
     modified_by: ['F_TRACK_FOLDER', 'F_UNTRACK_FOLDER']
 
   - name: 'SérieDeVersões (StoreIndex.series: seriesId → SnapshotVersion[])'
     owner_domain: 'Armazenamento'
     read_by: ['F_STORE_QUERY', 'F_WATCH', 'F_BASELINE', 'F_HISTORY_VIEW', 'F_CHANGES_VIEW', 'F_DECORATE']
-    modified_by: ['F_CAPTURE', 'F_PRUNE']
+    modified_by: ['F_CAPTURE', 'F_PRUNE', 'F_PURGE_PATH']
 
   - name: 'Blob (blobs/{sha256}.blob, conteúdo endereçado)'
     owner_domain: 'Armazenamento'
     read_by: ['F_STORE_QUERY (readSnapshotContent)', 'F_DIFF', 'F_RESTORE']
-    modified_by: ['F_CAPTURE (cria)', 'F_PRUNE (GC de órfãos)']
+    modified_by: ['F_CAPTURE (cria)', 'F_PRUNE (GC de órfãos)', 'F_PURGE_PATH (GC de órfãos)']
 
   - name: 'MapaDeVistos (globalState backtrail.seenVersions: seriesId → timestamp)'
     owner_domain: 'Visualização'
@@ -817,6 +958,11 @@ entities:
     owner_domain: 'Restauração'
     read_by: ['usuário']
     modified_by: ['F_RESTORE']
+
+  - name: 'CaminhosExcluidos (globalState backtrail.excludedPaths: folder → relPath[])'
+    owner_domain: 'Rastreamento'
+    read_by: ['F_IGNORE (via getIgnoreConfigForFolder)', 'F_MONITOR_VIEW']
+    modified_by: ['F_STOP_TRACKING_PATH (via F_EXCLUDED_PATHS)']
 ```
 
 ## Eventos
@@ -1334,6 +1480,31 @@ impact_rules:
       - 'Caminhos de escrita (captureSnapshot, captureSnapshotsBatch, pruneOlderThan) DEVEM usar readMutableIndex, nunca o índice retornado por readIndex diretamente — mutar o objeto cacheado antes de writeIndex confirmar sucesso deixa o cache à frente do disco se a escrita falhar depois (versão fantasma, nunca persistida, aparece em leituras subsequentes)'
       - 'Cache é keyed pelo mtime do index.json — qualquer escrita que não altere o mtime do arquivo quebraria a invalidação; não trocar por cache por conteúdo/hash sem medir o custo do hash em si'
       - 'Rodar test/unit/snapshotStore.test.ts (cenário de mtime cross-window) a cada mudança nesta área'
+
+  - id: 'IR_014'
+    trigger:
+      function_id: 'F_PURGE_PATH'
+      change: 'comportamento — critério de qual série é purgada, ou GC de blobs'
+    affected_direct: ['F_STORE_QUERY', 'F_STOP_TRACKING_PATH']
+    affected_indirect: ['F_DIFF', 'F_RESTORE (blob removido = diff/restore quebrado)']
+    impact_type: 'behavioral'
+    risk: 'high'
+    recommended_actions:
+      - 'Terceira função que apaga dados (junto de F_PRUNE/IR_006 e F_DELETE_BUCKET/IR_011) — irreversível, sem teste de regressão não se mexe aqui (ver test/unit/snapshotStore.test.ts: should_purge_a_series_currently_living_under_the_given_path_prefix e vizinhos)'
+      - "Critério de match DEVE seguir a mesma regra de 'série ativa' de IR_002 (última versão define o relPath corrente) — usar qualquer versão histórica em vez da ativa purgaria série que já foi renomeada para fora do caminho excluído, destruindo histórico de um arquivo que o usuário ainda quer rastrear"
+      - 'GC de blob órfão deve usar o mesmo critério de referência de F_PRUNE (IR_006) — as duas funções competem pelos mesmos blobs, uma diferença de critério entre elas deixaria um blob referenciado por uma virar órfão pela outra'
+
+  - id: 'IR_015'
+    trigger:
+      function_id: 'F_EXCLUDED_PATHS'
+      change: 'contrato — chave backtrail.excludedPaths ou formato (Record<folder, relPath[]>)'
+    affected_direct: ['F_IGNORE', 'F_MONITOR_VIEW', 'F_STOP_TRACKING_PATH']
+    affected_indirect: ['F_WATCH', 'F_BASELINE (via getIgnoreConfigForFolder)']
+    impact_type: 'breaking'
+    risk: 'medium'
+    recommended_actions:
+      - 'Formato persiste entre sessões; migração obrigatória se mudar (mesmo princípio de IR_005 para backtrail.trackedFolders)'
+      - 'Atualizar test/unit/excludedPaths.test.ts e test/unit/ignoreFilters.test.ts (casos excludedPathPrefixes)'
 ```
 
 ## Regras Transversais (Cross-Cutting)
@@ -1361,10 +1532,12 @@ open_questions: [] # perguntas do bootstrap respondidas em 2026-07-26 — ver Re
 
 ## Histórico de Revisões
 
-| Versão | Data       | Autor            | Mudanças                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------ | ---------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                                                                                                                                                                                                                                                                                 |
-| 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação                                                                                                                                                                                                                                                     |
-| 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas                                                                                               |
-| 0.3.0  | 2026-07-26 | Claude (fde-mof) | Fase 2 de performance implementada (branch perf/index-cache): F_STORE_QUERY ganha cache de StoreIndex por mtime + readMutableIndex (nova IR_012); índice compacto sem pretty-print (F_CAPTURE); F_ACTIVATE ganha prune periódico (setInterval 24h) + comando backtrail.pruneNow, substituindo a limitação "só na ativação" (F_PRUNE não-responsabilidade e regra transversal atualizadas)                |
-| 0.4.0  | 2026-07-26 | Claude (fde-mof) | Fase 3 de captura inteligente implementada (branch feat/capture-throttle, commit 86f21a7): F_WATCH ganha debounce de 15s por relPath com série ativa (scheduleDebouncedCapture, nova IR_013), escopado para não tocar a correlação de rename (IR_009); F_PRUNE ganha cap de 100 versões por série após o filtro de idade (IR_006 atualizada); regra transversal nova sobre as duas mitigações combinadas |
+| Versão | Data       | Autor            | Mudanças                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------ | ---------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação                                                                                                                                                                                                                                                                                                                                                                          |
+| 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas                                                                                                                                                                                                                    |
+| 0.3.0  | 2026-07-26 | Claude (fde-mof) | Fase 2 de performance implementada (branch perf/index-cache): F_STORE_QUERY ganha cache de StoreIndex por mtime + readMutableIndex (nova IR_012); índice compacto sem pretty-print (F_CAPTURE); F_ACTIVATE ganha prune periódico (setInterval 24h) + comando backtrail.pruneNow, substituindo a limitação "só na ativação" (F_PRUNE não-responsabilidade e regra transversal atualizadas)                                                                                                                                     |
+| 0.4.0  | 2026-07-26 | Claude (fde-mof) | Fase 3 de captura inteligente implementada (branch feat/capture-throttle, commit 86f21a7): F_WATCH ganha debounce de 15s por relPath com série ativa (scheduleDebouncedCapture, nova IR_013), escopado para não tocar a correlação de rename (IR_009); F_PRUNE ganha cap de 100 versões por série após o filtro de idade (IR_006 atualizada); regra transversal nova sobre as duas mitigações combinadas                                                                                                                      |
+| 0.5.0  | 2026-07-27 | Claude (fde-mof) | Fase 4 de compressão implementada (branch feat/blob-compression, PR #36): F_CAPTURE grava blobs novos em gzip (node:zlib), F_STORE_QUERY descomprime por magic bytes e aceita os dois formatos sem migração (IR_001 atualizada com o mesmo precedente); primeira ADR do repo (docs/adr/0001-blob-compression.md) — medição real no corpus ~/.claude: 3.76x, não os ~10x estimados no plano                                                                                                                                    |
+| 0.6.0  | 2026-07-27 | Claude (fde-mof) | Fase 5 de exclusão granular implementada (branch feat/path-exclusion): tópico 7 completo — novas F_EXCLUDED_PATHS (persistência, IR_015), F_PURGE_PATH (purga retroativa, IR_014), F_MONITOR_VIEW (TreeView com checkbox nativo) e F_STOP_TRACKING_PATH (orquestra exclusão + purga opcional, compartilhada pelo checkbox e pelo menu de contexto da view Changes); F_IGNORE ganha excludedPathPrefixes (matching por segmento); F_ACTIVATE reinicia só o watcher da pasta afetada para a exclusão valer sem reload de janela |
