@@ -13,10 +13,21 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const HARDENED_MARKER_NAME = '.permissions-hardened';
+
+// gzip's magic bytes. Blobs written before Fase 4 (compression) are raw
+// content and never start with these — checking them lets readSnapshotContent
+// accept both formats with zero migration of existing blobs.
+const GZIP_MAGIC_BYTE_0 = 0x1f;
+const GZIP_MAGIC_BYTE_1 = 0x8b;
+
+function isGzipped(data: Uint8Array): boolean {
+	return data.length >= 2 && data[0] === GZIP_MAGIC_BYTE_0 && data[1] === GZIP_MAGIC_BYTE_1;
+}
 
 // A series with no version cap grows unbounded for a file saved constantly in
 // a single day (a session transcript, a log) — retention by age alone doesn't
@@ -200,7 +211,10 @@ function applyCapture(
 	mkdirSync(blobsDir(storeRoot, bucketId), { recursive: true, mode: DIR_MODE });
 	const blobPath = join(blobsDir(storeRoot, bucketId), `${contentHash}.blob`);
 	if (!existsSync(blobPath)) {
-		writeFileSync(blobPath, content, { mode: FILE_MODE });
+		// contentHash (and sizeBytes below) is always of the original content —
+		// compression is a storage detail, never part of the identity or the
+		// size shown to the user.
+		writeFileSync(blobPath, gzipSync(content), { mode: FILE_MODE });
 	}
 
 	const version: SnapshotVersion = {
@@ -282,7 +296,10 @@ export function listVersions(storeRoot: string, absoluteFolderPath: string, seri
 
 export function readSnapshotContent(storeRoot: string, absoluteFolderPath: string, version: SnapshotVersion): Buffer {
 	const bucketId = bucketIdFor(absoluteFolderPath);
-	const content = readFileSync(join(blobsDir(storeRoot, bucketId), `${version.contentHash}.blob`));
+	const raw = readFileSync(join(blobsDir(storeRoot, bucketId), `${version.contentHash}.blob`));
+	// Blobs written before Fase 4 are raw (never start with the gzip magic
+	// bytes) — reading both formats means existing blobs never need migrating.
+	const content = isGzipped(raw) ? gunzipSync(raw) : raw;
 	if (hashContent(content) !== version.contentHash) {
 		// The index says this blob is version.contentHash but the bytes on disk
 		// hash to something else — silent corruption (disk error, a hand-edited
