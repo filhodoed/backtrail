@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-07-27
+
+### Fixed
+
+- Unchecking a single file in the **Monitor** view (e.g. `.DS_Store`) no longer excludes its whole parent directory. VS Code's default checkbox cascade was propagating the uncheck to the parent; the Monitor view now manages checkbox state entirely on its own.
+
 ## [0.9.0] - 2026-07-27
 
 ### Added
