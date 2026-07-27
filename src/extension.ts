@@ -64,6 +64,13 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const monitorProvider = new MonitorProvider(context);
 	const monitorTreeView = vscode.window.createTreeView<MonitorNode>('backtrail.monitor', {
 		treeDataProvider: monitorProvider,
+		// Without this, VS Code's own checkbox cascade unchecks the parent
+		// whenever a single child is unchecked (documented behavior, see
+		// TreeViewOptions.manageCheckboxStateManually example 4) — turning a
+		// ".DS_Store" exclusion into excluding its whole parent directory.
+		// getTreeItem already derives every node's checkbox state from
+		// excludedPaths, so VS Code's own cascade is redundant anyway.
+		manageCheckboxStateManually: true,
 	});
 	context.subscriptions.push(monitorTreeView);
 
