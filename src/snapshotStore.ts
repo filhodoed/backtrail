@@ -29,6 +29,25 @@ function isGzipped(data: Uint8Array): boolean {
 	return data.length >= 2 && data[0] === GZIP_MAGIC_BYTE_0 && data[1] === GZIP_MAGIC_BYTE_1;
 }
 
+// Same segment-wise "is this path under that prefix" rule as ignoreFilters.ts's
+// pathHasPrefix (not a naive string prefix, so "src-test" doesn't match prefix
+// "src") — duplicated rather than imported: this file is loaded directly by
+// node --test (see test/unit/snapshotStore.test.ts), whose ESM loader requires
+// extensioned specifiers that the project's tsc config (no
+// allowImportingTsExtensions outside test/) rejects for a same-package .ts
+// import. purgePath and ignoreFilters.shouldIgnore must still agree on what
+// "under this path" means — keep the two definitions in sync if either changes.
+function isUnderPathPrefix(relPath: string, prefix: string): boolean {
+	const splitSegments = (path: string): string[] => path.split(/[\\/]+/).filter(Boolean);
+	const pathSegments = splitSegments(relPath);
+	const prefixSegments = splitSegments(prefix);
+	return (
+		prefixSegments.length > 0 &&
+		prefixSegments.length <= pathSegments.length &&
+		prefixSegments.every((segment, i) => pathSegments[i] === segment)
+	);
+}
+
 // A series with no version cap grows unbounded for a file saved constantly in
 // a single day (a session transcript, a log) — retention by age alone doesn't
 // help there, since all those versions are still fresh. This is the backstop
@@ -395,6 +414,51 @@ export function pruneOlderThan(
 
 	writeIndex(storeRoot, bucketId, index);
 	return prunedCount;
+}
+
+// Excluding a path (Fase 5, Monitor view / Changes view context menu) only
+// stops FUTURE capture on its own — whatever was already saved before the
+// path was excluded keeps occupying space forever otherwise. This is the
+// other half: retroactively remove the series currently living under that
+// path. "Currently living" mirrors the active-series rule used everywhere
+// else in this file (findActiveSeriesId, listActiveFiles) — only a series
+// whose LAST version's relPath falls under the prefix is purged, so a file
+// that used to live under the excluded path but has since been renamed out
+// of it keeps its history untouched.
+export function purgePath(storeRoot: string, absoluteFolderPath: string, relPathPrefix: string): number {
+	const bucketId = bucketIdFor(absoluteFolderPath);
+	const index = readMutableIndex(storeRoot, bucketId);
+
+	let purgedCount = 0;
+	for (const seriesId of Object.keys(index.series)) {
+		const versions = index.series[seriesId];
+		const last = versions[versions.length - 1];
+		if (last && isUnderPathPrefix(last.relPath, relPathPrefix)) {
+			purgedCount += versions.length;
+			delete index.series[seriesId];
+		}
+	}
+
+	// Same orphan-blob GC as pruneOlderThan: a blob only goes away once no
+	// remaining series (in or outside the purged path) still references it.
+	const referencedHashes = new Set<string>();
+	for (const versions of Object.values(index.series)) {
+		for (const version of versions) {
+			referencedHashes.add(version.contentHash);
+		}
+	}
+	const blobs = blobsDir(storeRoot, bucketId);
+	if (existsSync(blobs)) {
+		for (const file of readdirSync(blobs)) {
+			const contentHash = file.replace(/\.blob$/, '');
+			if (!referencedHashes.has(contentHash)) {
+				rmSync(join(blobs, file));
+			}
+		}
+	}
+
+	writeIndex(storeRoot, bucketId, index);
+	return purgedCount;
 }
 
 // Untracking a folder (Stop Tracking, or a cancelled baseline scan undoing

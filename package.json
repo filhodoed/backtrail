@@ -56,6 +56,11 @@
 				"command": "backtrail.pruneNow",
 				"title": "Prune Now",
 				"category": "Backtrail"
+			},
+			{
+				"command": "backtrail.stopTrackingPath",
+				"title": "Stop Tracking This Path",
+				"category": "Backtrail"
 			}
 		],
 		"viewsContainers": {
@@ -82,6 +87,10 @@
 				{
 					"id": "backtrail.changes",
 					"name": "Changes"
+				},
+				{
+					"id": "backtrail.monitor",
+					"name": "Monitor"
 				}
 			]
 		},
@@ -117,6 +126,10 @@
 				{
 					"command": "backtrail.markFolderSeen",
 					"when": "view == backtrail.trackedFolders && viewItem == backtrailTrackedFolder"
+				},
+				{
+					"command": "backtrail.stopTrackingPath",
+					"when": "view == backtrail.changes && viewItem == backtrailChangedFile"
 				}
 			]
 		},

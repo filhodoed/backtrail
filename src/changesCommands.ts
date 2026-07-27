@@ -1,12 +1,14 @@
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import type { ChangesProvider } from './changesProvider';
+import type { ChangeNode, ChangesProvider } from './changesProvider';
 import type { BacktrailDecorationProvider } from './decorationProvider';
 import { SHOW_DIFF_COMMAND, SHOW_VERSION_INFO_COMMAND } from './diffCommand';
+import { stopTrackingPath } from './pathExclusion';
 import { markSeen } from './seenVersions';
 import type { SnapshotVersion } from './snapshotStore';
 
 export const OPEN_CHANGED_FILE_COMMAND = 'backtrail.openChangedFile';
+export const STOP_TRACKING_PATH_COMMAND = 'backtrail.stopTrackingPath';
 
 export function registerOpenChangedFileCommand(
 	context: vscode.ExtensionContext,
@@ -38,5 +40,24 @@ export function registerOpenChangedFileCommand(
 				changesProvider.refresh();
 			},
 		),
+	);
+}
+
+export function registerStopTrackingPathCommand(
+	context: vscode.ExtensionContext,
+	storeRoot: string,
+	changesProvider: ChangesProvider,
+	onExclusionChanged: (folder: string) => void,
+): void {
+	context.subscriptions.push(
+		vscode.commands.registerCommand(STOP_TRACKING_PATH_COMMAND, async (node: ChangeNode) => {
+			if (node.kind !== 'file') {
+				return;
+			}
+			await stopTrackingPath(context.globalState, storeRoot, node.folder, node.relPath, () => {
+				onExclusionChanged(node.folder);
+				changesProvider.refresh();
+			});
+		}),
 	);
 }

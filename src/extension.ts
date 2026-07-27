@@ -1,13 +1,20 @@
 import { basename } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesProvider } from './changesProvider';
-import { registerOpenChangedFileCommand } from './changesCommands';
+import { registerOpenChangedFileCommand, registerStopTrackingPathCommand } from './changesCommands';
 import { registerCommands } from './commands';
-import { getCaptureDebounceSeconds, getIgnoreConfig, getMaxVersionsPerSeries, getRetentionDays } from './config';
+import {
+	getCaptureDebounceSeconds,
+	getIgnoreConfigForFolder,
+	getMaxVersionsPerSeries,
+	getRetentionDays,
+} from './config';
 import { createDecorationProvider, markFileAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { registerDiffCommand } from './diffCommand';
 import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
+import { registerMonitorCheckboxHandler } from './monitorCommands';
+import { MonitorProvider, type MonitorNode } from './monitorProvider';
 import { registerRestoreCommand } from './restoreCommand';
 import { deleteBucket, hardenBucketPermissions, pruneOlderThan } from './snapshotStore';
 import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
@@ -30,6 +37,7 @@ export interface BacktrailApi {
 	decorationProvider: BacktrailDecorationProvider;
 	trackedFoldersProvider: TrackedFoldersProvider;
 	changesProvider: ChangesProvider;
+	monitorProvider: MonitorProvider;
 }
 
 export function activate(context: vscode.ExtensionContext): BacktrailApi {
@@ -53,9 +61,30 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const changesProvider = new ChangesProvider(context, storeRoot);
 	context.subscriptions.push(vscode.window.createTreeView('backtrail.changes', { treeDataProvider: changesProvider }));
 
+	const monitorProvider = new MonitorProvider(context);
+	const monitorTreeView = vscode.window.createTreeView<MonitorNode>('backtrail.monitor', {
+		treeDataProvider: monitorProvider,
+	});
+	context.subscriptions.push(monitorTreeView);
+
 	registerDiffCommand(context, storeRoot);
 	registerRestoreCommand(context, storeRoot);
 	registerOpenChangedFileCommand(context, decorationProvider, changesProvider);
+
+	// A path excluded via the Monitor checkbox or the Changes context menu must
+	// stop being captured going forward, not just get purged retroactively —
+	// but ignoreConfig is only read once, at watcher creation (same limitation
+	// already noted for vscode settings — see IR_007 in docs/MOF.md). Restarting
+	// just this folder's watcher is the narrow fix: it picks up the freshly
+	// persisted exclusion without requiring a full window reload.
+	function onExclusionChanged(folder: string): void {
+		stopWatching(folder);
+		startWatching(folder);
+		monitorProvider.refresh();
+	}
+
+	registerMonitorCheckboxHandler(context, monitorTreeView, storeRoot, onExclusionChanged);
+	registerStopTrackingPathCommand(context, storeRoot, changesProvider, onExclusionChanged);
 
 	async function handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
 		const uri = editor?.document.uri;
@@ -88,7 +117,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 				watchTrackedFolder(
 					folder,
 					storeRoot,
-					getIgnoreConfig(),
+					getIgnoreConfigForFolder(context.globalState, folder),
 					(uri) => {
 						historyProvider.notifyChange(uri);
 						decorationProvider.refresh(uri);
@@ -146,7 +175,12 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 
 		const scan = (async () => {
 			try {
-				await captureBaselineSnapshots(folder, storeRoot, getIgnoreConfig(), cancellation.token);
+				await captureBaselineSnapshots(
+					folder,
+					storeRoot,
+					getIgnoreConfigForFolder(context.globalState, folder),
+					cancellation.token,
+				);
 			} catch {
 				// A folder that vanished mid-scan (moved, deleted) shouldn't
 				// surface as an error — watching already started above.
@@ -243,6 +277,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		decorationProvider,
 		trackedFoldersProvider,
 		changesProvider,
+		monitorProvider,
 	};
 }
 

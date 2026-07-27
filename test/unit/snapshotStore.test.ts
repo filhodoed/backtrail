@@ -22,6 +22,7 @@ import {
 	hardenBucketPermissions,
 	listVersions,
 	pruneOlderThan,
+	purgePath,
 	readSnapshotContent,
 } from '../../src/snapshotStore.ts';
 
@@ -281,6 +282,86 @@ test('should_remove_blob_orphaned_by_the_version_cap', (t) => {
 	const blobFiles = readdirSync(join(storeRoot, bucketId, 'blobs'));
 
 	assert.equal(blobFiles.length, 1);
+});
+
+test('should_purge_a_series_currently_living_under_the_given_path_prefix', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'cache/notas.md', Buffer.from('v1'), false);
+	captureSnapshot(storeRoot, folder, 'series-2', 'notas.md', Buffer.from('v1'), false);
+
+	const purgedCount = purgePath(storeRoot, folder, 'cache');
+
+	assert.equal(purgedCount, 1);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'cache/notas.md'), undefined);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), 'series-2');
+});
+
+test('should_not_purge_a_series_whose_current_rel_path_is_outside_the_prefix_even_if_an_old_version_was_inside_it', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'cache/notas.md', Buffer.from('v1'), false, daysAgo(2));
+	// Renamed out of the excluded folder — the series is now live elsewhere.
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(1));
+
+	const purgedCount = purgePath(storeRoot, folder, 'cache');
+
+	assert.equal(purgedCount, 0);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), 'series-1');
+});
+
+test('should_not_purge_a_folder_whose_name_only_partially_matches_the_prefix', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'cache-backup/notas.md', Buffer.from('v1'), false);
+
+	const purgedCount = purgePath(storeRoot, folder, 'cache');
+
+	assert.equal(purgedCount, 0);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'cache-backup/notas.md'), 'series-1');
+});
+
+test('should_remove_blob_orphaned_by_a_path_purge', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'cache/notas.md', Buffer.from('conteúdo único'), false);
+
+	purgePath(storeRoot, folder, 'cache');
+	const blobFiles = readdirSync(join(storeRoot, bucketId, 'blobs'));
+
+	assert.equal(blobFiles.length, 0);
+});
+
+test('should_keep_blob_still_referenced_outside_the_purged_path', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'cache/a.md', Buffer.from('conteúdo compartilhado'), false);
+	captureSnapshot(storeRoot, folder, 'series-2', 'b.md', Buffer.from('conteúdo compartilhado'), false);
+
+	purgePath(storeRoot, folder, 'cache');
+	const blobFiles = readdirSync(join(storeRoot, bucketId, 'blobs'));
+
+	assert.equal(blobFiles.length, 1);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'b.md'), 'series-2');
+});
+
+test('should_be_a_no_op_purging_a_path_with_nothing_under_it', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+
+	const purgedCount = purgePath(storeRoot, folder, 'cache');
+
+	assert.equal(purgedCount, 0);
+	assert.equal(findActiveSeriesId(storeRoot, folder, 'notas.md'), 'series-1');
 });
 
 test('should_treat_a_corrupt_index_as_empty_instead_of_throwing', (t) => {
