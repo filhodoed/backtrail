@@ -4,6 +4,18 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-27
+
+### Added
+
+- New **Monitor** view — browse the real filesystem of each tracked folder and uncheck any file or folder to stop tracking it, without waiting for a name-based rule in settings. Complements `backtrail.ignoredFolders` (which matches a folder name anywhere) with exclusion for one specific path.
+- New **"Stop Tracking This Path"** command in the Changes view's right-click menu, for the same one-off exclusion without opening the Monitor view.
+- Excluding a path now offers to delete its already-saved history too, reclaiming the space it was using — not just stopping future captures.
+
+### Changed
+
+- New snapshots are now stored gzip-compressed on disk (measured ~3.76x smaller, ~73% space saved on a real-world corpus). Existing snapshots are read exactly as before — nothing needs migrating.
+
 ## [0.8.0] - 2026-07-26
 
 ### Added
