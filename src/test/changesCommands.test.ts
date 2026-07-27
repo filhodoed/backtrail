@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { OPEN_CHANGED_FILE_COMMAND } from '../changesCommands';
+import { OPEN_CHANGED_FILE_COMMAND, STOP_TRACKING_PATH_COMMAND } from '../changesCommands';
+import { listExcludedPaths } from '../excludedPaths';
 import type { BacktrailApi } from '../extension';
 import { getDecorationState } from '../seenVersions';
 import { captureSnapshot, findActiveSeriesId } from '../snapshotStore';
@@ -44,5 +45,25 @@ suite('Changes Commands Integration', () => {
 		await vscode.commands.executeCommand(OPEN_CHANGED_FILE_COMMAND, folder, seriesId, undefined, version, true);
 
 		assert.equal(getDecorationState(api.globalState, seriesId, version.timestamp), 'none');
+	});
+
+	test('stopping tracking a path from the Changes context menu excludes it immediately', async () => {
+		captureSnapshot(api.storeRoot, folder, 'stop-tracking-series', 'cache/notas.md', Buffer.from('v1'), false);
+
+		await vscode.commands.executeCommand(STOP_TRACKING_PATH_COMMAND, {
+			kind: 'file',
+			folder,
+			relPath: 'cache/notas.md',
+			state: 'new',
+			seriesId: 'stop-tracking-series',
+		});
+
+		assert.deepEqual(listExcludedPaths(api.globalState, folder), ['cache/notas.md']);
+	});
+
+	test('does nothing when invoked on a group node instead of a file node', async () => {
+		await vscode.commands.executeCommand(STOP_TRACKING_PATH_COMMAND, { kind: 'group', state: 'new', count: 1 });
+
+		assert.deepEqual(listExcludedPaths(api.globalState, folder), []);
 	});
 });

@@ -104,3 +104,39 @@ test('should_ignore_file_inside_a_restored_folder_by_default', () => {
 
 	assert.equal(result, true);
 });
+
+test('should_ignore_a_file_directly_matching_an_excluded_path_prefix', () => {
+	const result = shouldIgnore('cache/notas.md', 100, { ...baseConfig, excludedPathPrefixes: ['cache'] });
+
+	assert.equal(result, true);
+});
+
+test('should_ignore_a_file_nested_deep_inside_an_excluded_path_prefix', () => {
+	const result = shouldIgnore('cache/nested/deep/notas.md', 100, { ...baseConfig, excludedPathPrefixes: ['cache'] });
+
+	assert.equal(result, true);
+});
+
+test('should_not_ignore_a_file_whose_folder_only_partially_matches_an_excluded_path_prefix', () => {
+	const result = shouldIgnore('cache-backup/notas.md', 100, { ...baseConfig, excludedPathPrefixes: ['cache'] });
+
+	assert.equal(result, false);
+});
+
+test('should_not_ignore_a_file_outside_any_excluded_path_prefix', () => {
+	const result = shouldIgnore('src/notas.md', 100, { ...baseConfig, excludedPathPrefixes: ['cache', 'dist/old'] });
+
+	assert.equal(result, false);
+});
+
+test('should_ignore_a_file_matching_one_of_several_excluded_path_prefixes', () => {
+	const result = shouldIgnore('dist/old/build.js', 100, { ...baseConfig, excludedPathPrefixes: ['cache', 'dist/old'] });
+
+	assert.equal(result, true);
+});
+
+test('should_not_ignore_by_excluded_path_prefix_when_none_are_configured', () => {
+	const result = shouldIgnore('anything/notas.md', 100, baseConfig);
+
+	assert.equal(result, false);
+});
