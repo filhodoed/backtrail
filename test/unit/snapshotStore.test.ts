@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { gzipSync } from 'node:zlib';
 import {
 	bucketIdFor,
 	captureSnapshot,
@@ -387,6 +388,53 @@ test('should_reject_reading_a_snapshot_whose_blob_content_does_not_match_its_rec
 	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('conteúdo original'), false);
 	const blobPath = join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`);
 	writeFileSync(blobPath, 'conteúdo adulterado');
+
+	assert.throws(() => readSnapshotContent(storeRoot, folder, version), /corrupted/);
+});
+
+test('should_store_a_new_blob_gzip_compressed_on_disk', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	const version = captureSnapshot(
+		storeRoot,
+		folder,
+		'series-1',
+		'notas.md',
+		Buffer.from('conteúdo repetitivo '.repeat(50)),
+		false,
+	);
+	const blobPath = join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`);
+	const raw = readFileSync(blobPath);
+
+	assert.equal(raw[0], 0x1f);
+	assert.equal(raw[1], 0x8b);
+});
+
+test('should_read_back_exact_content_from_a_legacy_uncompressed_blob', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('conteúdo original'), false);
+	const blobPath = join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`);
+	// Simulate a blob written by a pre-Fase-4 backtrail version (raw, no gzip).
+	writeFileSync(blobPath, 'conteúdo original');
+
+	const content = readSnapshotContent(storeRoot, folder, version);
+
+	assert.equal(content.toString('utf8'), 'conteúdo original');
+});
+
+test('should_reject_a_gzipped_blob_whose_decompressed_content_does_not_match_its_recorded_hash', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('conteúdo original'), false);
+	const blobPath = join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`);
+	writeFileSync(blobPath, gzipSync(Buffer.from('conteúdo adulterado')));
 
 	assert.throws(() => readSnapshotContent(storeRoot, folder, version), /corrupted/);
 });

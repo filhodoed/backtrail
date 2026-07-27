@@ -10,8 +10,8 @@
 mof_meta:
   system_name: 'Backtrail'
   purpose: 'Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais.'
-  version: '0.4.0'
-  last_updated: '2026-07-26'
+  version: '0.5.0'
+  last_updated: '2026-07-27'
   owners: ['Edson Junior (filhodoed)']
   domains: ['Rastreamento', 'Captura', 'Armazenamento', 'Visualização', 'Restauração']
   external_dependencies: ['VS Code Extension API (^1.125.0)', 'Node.js stdlib (fs, crypto, path, os)']
@@ -366,6 +366,7 @@ functions:
       - 'writeIndex grava em .tmp e faz rename atômico; a versão anterior válida vira index.json.bak antes do rename — crash mid-write não corrompe mais o index.json em uso (Fase 1 de hardening, 26/07)'
       - 'Novos buckets/índices/blobs nascem em 0700/0600 (antes 0755/0644) — ver hardenBucketPermissions em F_STORE_QUERY para o sweep de buckets legados'
       - 'index.json é gravado sem pretty-print desde a Fase 2 de performance (26/07) — formato compacto, retrocompatível (JSON.parse não depende de indentação)'
+      - 'Blobs novos são gravados gzip (node:zlib) desde a Fase 4 (27/07) — sha256 (contentHash) e sizeBytes continuam do conteúdo original, nunca do comprimido; compressão é puro detalhe de armazenamento. Blobs pré-Fase-4 continuam raw no disco, sem migração — ver F_STORE_QUERY para a leitura dual-formato'
 
   - id: 'F_STORE_QUERY'
     name: 'Consultar Histórico do Store'
@@ -409,6 +410,7 @@ functions:
       - 'readSnapshotContent verifica sha256 do blob lido contra version.contentHash e lança erro em mismatch (Fase 1 de hardening, 26/07) — F_DIFF e F_RESTORE capturam e mostram mensagem, não deixam a exceção crua propagar'
       - 'readIndex cacheia o StoreIndex parseado em memória, keyed pelo caminho do index.json e pelo mtime do arquivo (Fase 2 de performance, 26/07) — uma escrita de outra janela ou ferramenta externa muda o mtime e o cache é ignorado na próxima leitura, sem mensageria de invalidação. Leituras puras (listVersions/findActiveSeriesId/listActiveFiles) compartilham o objeto cacheado sem cópia — é o caminho quente da decoração do Explorer'
       - 'Caminhos de escrita (F_CAPTURE, F_PRUNE) NUNCA usam o objeto do cache diretamente — chamam readMutableIndex, que faz cópia rasa do mapa de séries antes de mutar. Sem isso, uma escrita que falhasse depois de mutar o índice em memória deixaria o cache à frente do disco (leituras mostrando uma versão nunca persistida). Ver IR_012'
+      - 'readSnapshotContent detecta blob gzip pelos magic bytes (1f 8b) e descomprime antes de conferir o hash; blob sem magic bytes é lido como raw (formato pré-Fase-4) — os dois formatos convivem no mesmo bucket indefinidamente, sem migração (Fase 4, 27/07, ADR-0001)'
 
   - id: 'F_PRUNE'
     name: 'Aplicar Retenção de Snapshots'
@@ -1166,6 +1168,7 @@ impact_rules:
     recommended_actions:
       - 'Índices existentes no disco dos usuários NÃO são migráveis automaticamente — qualquer mudança de schema exige migração ou leitura retrocompatível em readIndex'
       - 'Atualizar test/unit/snapshotStore.test.ts e revisar todos os testes de provider'
+      - 'Mesmo princípio se aplica ao formato de blob (não só ao index.json): a Fase 4 (compressão) resolveu isso com leitura retrocompatível por magic bytes em vez de migração — precedente a seguir se o formato de blob mudar de novo (ver ADR-0001)'
 
   - id: 'IR_002'
     trigger:
