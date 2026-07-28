@@ -46,7 +46,6 @@ export function registerOpenChangedFileCommand(
 export function registerStopTrackingPathCommand(
 	context: vscode.ExtensionContext,
 	storeRoot: string,
-	changesProvider: ChangesProvider,
 	onExclusionChanged: (folder: string) => void,
 ): void {
 	context.subscriptions.push(
@@ -54,10 +53,9 @@ export function registerStopTrackingPathCommand(
 			if (node.kind !== 'file') {
 				return;
 			}
-			await stopTrackingPath(context.globalState, storeRoot, node.folder, node.relPath, () => {
-				onExclusionChanged(node.folder);
-				changesProvider.refresh();
-			});
+			await stopTrackingPath(context.globalState, storeRoot, node.folder, node.relPath, () =>
+				onExclusionChanged(node.folder),
+			);
 		}),
 	);
 }

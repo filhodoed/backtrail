@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
+import { STOP_TRACKING_PATH_COMMAND } from '../changesCommands';
 import { PRUNE_NOW_COMMAND } from '../extension';
 import { captureSnapshot, listVersions } from '../snapshotStore';
 import { isTracked, trackFolder, untrackFolder } from '../trackedFolders';
@@ -71,5 +72,36 @@ suite('Extension Test Suite', () => {
 		await vscode.commands.executeCommand('backtrail.trackFolder', vscode.Uri.file(plainFolder));
 
 		assert.equal(isTracked(api.globalState, plainFolder), true);
+	});
+
+	test('excluding a path refreshes the Changes panel without a reload', async () => {
+		const folder = mkdtempSync(join(tmpdir(), 'backtrail-exclusion-refresh-test-'));
+		await trackFolder(api.globalState, folder);
+
+		try {
+			captureSnapshot(api.storeRoot, folder, 'exclusion-refresh-series', 'notas.md', Buffer.from('v1'), false);
+
+			let fired = false;
+			const subscription = api.changesProvider.onDidChangeTreeData(() => {
+				fired = true;
+			});
+
+			try {
+				await vscode.commands.executeCommand(STOP_TRACKING_PATH_COMMAND, {
+					kind: 'file',
+					folder,
+					relPath: 'notas.md',
+					state: 'new',
+					seriesId: 'exclusion-refresh-series',
+				});
+
+				assert.equal(fired, true);
+			} finally {
+				subscription.dispose();
+			}
+		} finally {
+			await untrackFolder(api.globalState, folder);
+			rmSync(folder, { recursive: true, force: true });
+		}
 	});
 });
