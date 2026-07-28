@@ -167,6 +167,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 			vscode.workspace.updateWorkspaceFolders(index, 1);
 		}
 		trackedFoldersProvider.refresh();
+		monitorProvider.refresh();
 	}
 
 	function onFolderTracked(folder: string): void {
@@ -178,6 +179,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		startWatching(folder);
 		trackedFoldersProvider.refresh();
 		changesProvider.refresh();
+		monitorProvider.refresh();
 
 		const cancellation = new vscode.CancellationTokenSource();
 
@@ -231,6 +233,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		stopWatching(folder);
 		trackedFoldersProvider.refresh();
 		changesProvider.refresh();
+		monitorProvider.refresh();
 	}
 
 	for (const folder of listTrackedFolders(context.globalState)) {
