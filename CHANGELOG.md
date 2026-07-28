@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] - 2026-07-28
+
+### Fixed
+
+- Tracking or untracking a folder didn't refresh the **Monitor** view — a removed folder stayed listed there until an unrelated action (like toggling an exclusion) happened to trigger a refresh.
+
 ## [0.9.2] - 2026-07-28
 
 ### Fixed
