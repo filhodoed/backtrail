@@ -280,8 +280,15 @@ function scheduleDebouncedCapture(
 			// mid-debounce) — nothing left on disk to capture.
 			return;
 		}
-		captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
-		onCapture?.(uri);
+		try {
+			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
+			onCapture?.(uri);
+		} catch {
+			// This timer fires after the sync handler that scheduled it already
+			// returned, so it's outside that handler's try/catch — an uncaught
+			// throw here (disk full, permission denied) would crash the extension
+			// host same as an uncaught throw in the sync path. Best-effort: skip.
+		}
 	}, captureDebounceMs);
 	captureDebounceTimers.set(relPath, timer);
 }
@@ -342,10 +349,15 @@ function captureIfNotIgnored(
 
 	const graceTimer = setTimeout(() => {
 		pendingCaptureTimers.delete(graceTimer);
-		const delayedMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
-		const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
-		captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
-		onCapture?.(uri);
+		try {
+			const delayedMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
+			const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
+			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
+			onCapture?.(uri);
+		} catch {
+			// See comment in scheduleDebouncedCapture's timer above — this also
+			// runs after the sync handler returned, outside its try/catch.
+		}
 	}, RENAME_GRACE_WINDOW_MS);
 	pendingCaptureTimers.add(graceTimer);
 }
