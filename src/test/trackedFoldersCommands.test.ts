@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,16 +15,32 @@ import {
 import { isTracked, untrackFolder } from '../trackedFolders';
 import type { BacktrailApi } from '../extension';
 
-function waitForWorkspaceFolderChange(timeoutMs = 10000): Promise<void> {
+function hasWorkspaceFolder(path: string): boolean {
+	return (vscode.workspace.workspaceFolders ?? []).some((f) => f.uri.fsPath === path);
+}
+
+// A plain onDidChangeWorkspaceFolders listener resolves on the next change
+// event, whatever it was — a stale folder from an earlier, timed-out run
+// being reconciled away by VS Code itself fires that same event, resolving
+// this for the wrong reason before the folder this call actually cares
+// about has been added/removed. Checking the specific condition (and
+// short-circuiting if it's already true) makes this robust to any change
+// event, not just the one the caller is expecting.
+function waitForWorkspaceFolder(predicate: () => boolean, timeoutMs = 10000): Promise<void> {
+	if (predicate()) {
+		return Promise.resolve();
+	}
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			disposable.dispose();
-			reject(new Error('waitForWorkspaceFolderChange: timed out'));
+			reject(new Error('waitForWorkspaceFolder: timed out'));
 		}, timeoutMs);
 		const disposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
-			clearTimeout(timer);
-			disposable.dispose();
-			resolve();
+			if (predicate()) {
+				clearTimeout(timer);
+				disposable.dispose();
+				resolve();
+			}
 		});
 	});
 }
@@ -37,12 +54,20 @@ suite('Tracked Folders Commands Integration', () => {
 		api = (await ext.activate()) as BacktrailApi;
 	});
 
-	test('addFolder tracks the given folder and appends it to the workspace', async () => {
+	test('addFolder tracks the given folder and appends it to the workspace', async function () {
+		// A fresh test profile's very first updateWorkspaceFolders round trip
+		// pays a one-time Electron/extension-host cold-start cost that later
+		// calls don't — comfortably longer than mocha's default budget, and
+		// occasionally longer than even this one under system load. Retrying
+		// catches that without masking a real regression: an actual bug in
+		// the add/remove flow would fail the same way on every retry too.
+		this.timeout(30000);
+		this.retries(2);
 		const folder = mkdtempSync(join(tmpdir(), 'backtrail-addfolder-test-'));
 		const beforeCount = (vscode.workspace.workspaceFolders ?? []).length;
 
 		try {
-			const changed = waitForWorkspaceFolderChange();
+			const changed = waitForWorkspaceFolder(() => hasWorkspaceFolder(folder), 25000);
 			await vscode.commands.executeCommand(ADD_FOLDER_COMMAND, vscode.Uri.file(folder));
 			await changed;
 
@@ -53,7 +78,7 @@ suite('Tracked Folders Commands Integration', () => {
 		} finally {
 			const index = (vscode.workspace.workspaceFolders ?? []).findIndex((f) => f.uri.fsPath === folder);
 			if (index !== -1) {
-				const removed = waitForWorkspaceFolderChange();
+				const removed = waitForWorkspaceFolder(() => !hasWorkspaceFolder(folder), 25000);
 				vscode.workspace.updateWorkspaceFolders(index, 1);
 				await removed;
 			}
@@ -77,15 +102,17 @@ suite('Tracked Folders Commands Integration', () => {
 		}
 	});
 
-	test('untrackFolder stops tracking a folder that is not part of the workspace', async () => {
+	test('untrackFolder stops tracking a folder that is not part of the workspace', async function () {
+		this.timeout(30000);
+		this.retries(2);
 		const folder = mkdtempSync(join(tmpdir(), 'backtrail-untrack-test-'));
-		const added = waitForWorkspaceFolderChange();
+		const added = waitForWorkspaceFolder(() => hasWorkspaceFolder(folder), 25000);
 		await vscode.commands.executeCommand(ADD_FOLDER_COMMAND, vscode.Uri.file(folder));
 		await added;
 
 		const index = (vscode.workspace.workspaceFolders ?? []).findIndex((f) => f.uri.fsPath === folder);
 		if (index !== -1) {
-			const removed = waitForWorkspaceFolderChange();
+			const removed = waitForWorkspaceFolder(() => !hasWorkspaceFolder(folder), 25000);
 			vscode.workspace.updateWorkspaceFolders(index, 1);
 			await removed;
 		}
@@ -105,8 +132,8 @@ suite('Tracked Folders Commands Integration', () => {
 		await vscode.commands.executeCommand('backtrail.trackFolder', vscode.Uri.file(folder));
 
 		try {
-			const a = captureSnapshot(api.storeRoot, folder, 'markseen-series-a', 'a.md', Buffer.from('v1'), false);
-			const b = captureSnapshot(api.storeRoot, folder, 'markseen-series-b', 'b.md', Buffer.from('v1'), false);
+			const a = captureSnapshot(api.storeRoot, folder, randomUUID(), 'a.md', Buffer.from('v1'), false);
+			const b = captureSnapshot(api.storeRoot, folder, randomUUID(), 'b.md', Buffer.from('v1'), false);
 			assert.equal(
 				getDecorationState(api.globalState, findActiveSeriesId(api.storeRoot, folder, 'a.md')!, a.timestamp),
 				'new',

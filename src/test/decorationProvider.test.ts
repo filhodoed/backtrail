@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +32,7 @@ suite('Decoration Provider Integration', () => {
 	});
 
 	test('badges a freshly captured file as new', async () => {
-		captureSnapshot(api.storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+		captureSnapshot(api.storeRoot, folder, randomUUID(), 'notas.md', Buffer.from('v1'), false);
 		const uri = vscode.Uri.file(join(folder, 'notas.md'));
 
 		const decoration = await api.decorationProvider.provideFileDecoration(uri, noToken);
