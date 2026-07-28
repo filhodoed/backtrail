@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import {
 	isTracked,
@@ -101,7 +102,7 @@ test('should_resolve_tracked_folder_for_file_directly_inside', () => {
 test('should_resolve_tracked_folder_for_file_in_subdirectory', () => {
 	const result = resolveTrackedFolder(['/Users/edsonjunior/notes'], '/Users/edsonjunior/notes/docs/a.md');
 
-	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: 'docs/a.md' });
+	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: join('docs', 'a.md') });
 });
 
 test('should_return_undefined_for_file_outside_any_tracked_folder', () => {

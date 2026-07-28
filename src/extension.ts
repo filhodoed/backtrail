@@ -88,10 +88,11 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		stopWatching(folder);
 		startWatching(folder);
 		monitorProvider.refresh();
+		changesProvider.refresh();
 	}
 
 	registerMonitorCheckboxHandler(context, monitorTreeView, storeRoot, onExclusionChanged);
-	registerStopTrackingPathCommand(context, storeRoot, changesProvider, onExclusionChanged);
+	registerStopTrackingPathCommand(context, storeRoot, onExclusionChanged);
 
 	async function handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
 		const uri = editor?.document.uri;
