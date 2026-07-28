@@ -44,7 +44,7 @@ test('should_build_restored_path_mirroring_slugified_hierarchy', () => {
 
 	const result = resolveRestorePath('/tracked', 'Docs/Minhas Notas/notas.md', date, () => false);
 
-	assert.equal(result, '/tracked/restored/docs/minhas-notas/notas.restored-2026-07-20-1432.md');
+	assert.equal(result, join('/tracked', 'restored', 'docs', 'minhas-notas', 'notas.restored-2026-07-20-1432.md'));
 });
 
 test('should_build_restored_path_for_file_without_extension', () => {
@@ -52,28 +52,28 @@ test('should_build_restored_path_for_file_without_extension', () => {
 
 	const result = resolveRestorePath('/tracked', 'Makefile', date, () => false);
 
-	assert.equal(result, '/tracked/restored/Makefile.restored-2026-07-20-1432');
+	assert.equal(result, join('/tracked', 'restored', 'Makefile.restored-2026-07-20-1432'));
 });
 
 test('should_increment_suffix_when_restore_path_already_exists', () => {
 	const date = new Date(2026, 6, 20, 14, 32);
-	const existing = new Set(['/tracked/restored/notas.restored-2026-07-20-1432.md']);
+	const existing = new Set([join('/tracked', 'restored', 'notas.restored-2026-07-20-1432.md')]);
 
 	const result = resolveRestorePath('/tracked', 'notas.md', date, (path) => existing.has(path));
 
-	assert.equal(result, '/tracked/restored/notas.restored-2026-07-20-1432-2.md');
+	assert.equal(result, join('/tracked', 'restored', 'notas.restored-2026-07-20-1432-2.md'));
 });
 
 test('should_increment_suffix_multiple_times_when_several_collisions_exist', () => {
 	const date = new Date(2026, 6, 20, 14, 32);
 	const existing = new Set([
-		'/tracked/restored/notas.restored-2026-07-20-1432.md',
-		'/tracked/restored/notas.restored-2026-07-20-1432-2.md',
+		join('/tracked', 'restored', 'notas.restored-2026-07-20-1432.md'),
+		join('/tracked', 'restored', 'notas.restored-2026-07-20-1432-2.md'),
 	]);
 
 	const result = resolveRestorePath('/tracked', 'notas.md', date, (path) => existing.has(path));
 
-	assert.equal(result, '/tracked/restored/notas.restored-2026-07-20-1432-3.md');
+	assert.equal(result, join('/tracked', 'restored', 'notas.restored-2026-07-20-1432-3.md'));
 });
 
 test('should_write_restored_file_to_disk_and_return_its_path', (t) => {

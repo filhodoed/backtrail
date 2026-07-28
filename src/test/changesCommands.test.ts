@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,14 +32,7 @@ suite('Changes Commands Integration', () => {
 	});
 
 	test('opening a changed file from the sidebar marks it as seen', async () => {
-		const version = captureSnapshot(
-			api.storeRoot,
-			folder,
-			'openchange-series',
-			'notas.md',
-			Buffer.from('conteúdo'),
-			false,
-		);
+		const version = captureSnapshot(api.storeRoot, folder, randomUUID(), 'notas.md', Buffer.from('conteúdo'), false);
 		const seriesId = findActiveSeriesId(api.storeRoot, folder, 'notas.md')!;
 		assert.equal(getDecorationState(api.globalState, seriesId, version.timestamp), 'new');
 

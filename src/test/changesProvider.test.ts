@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,7 +50,7 @@ suite('Changes Provider Integration', () => {
 		});
 
 		test('groups an unseen file under New and a seen-then-edited file under Modified', async () => {
-			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-new', 'novo.md', Buffer.from('v1'), false);
+			captureSnapshot(api.storeRoot, folder, randomUUID(), 'novo.md', Buffer.from('v1'), false);
 
 			captureSnapshot(api.storeRoot, folder, 'changesprovider-series-changed', 'editado.md', Buffer.from('v1'), false);
 			await markFileAsSeen(
@@ -99,14 +100,7 @@ suite('Changes Provider Integration', () => {
 			await trackFolder(api.globalState, goneFolder);
 			rmSync(goneFolder, { recursive: true, force: true });
 
-			captureSnapshot(
-				api.storeRoot,
-				folder,
-				'changesprovider-series-survivor',
-				'sobrevive.md',
-				Buffer.from('v1'),
-				false,
-			);
+			captureSnapshot(api.storeRoot, folder, randomUUID(), 'sobrevive.md', Buffer.from('v1'), false);
 
 			try {
 				const groups = api.changesProvider.getChildren();

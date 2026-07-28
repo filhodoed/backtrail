@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
 	chmodSync,
 	existsSync,
@@ -552,8 +553,29 @@ test('should_restrict_bucket_and_blob_permissions_after_hardening_a_legacy_bucke
 
 	hardenBucketPermissions(storeRoot, folder);
 
-	assert.equal(statSync(bucketPath).mode & 0o777, 0o700);
-	assert.equal(statSync(blobPath).mode & 0o777, 0o600);
+	// fs's mode bits are POSIX-only — on Windows they don't reflect a real
+	// access-control decision (see the Windows ACL test below for that).
+	if (process.platform !== 'win32') {
+		assert.equal(statSync(bucketPath).mode & 0o777, 0o700);
+		assert.equal(statSync(blobPath).mode & 0o777, 0o600);
+	}
+});
+
+test('restricts a new bucket to the current user only on Windows', { skip: process.platform !== 'win32' }, (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+
+	const bucketPath = join(storeRoot, bucketId);
+	const output = execFileSync('icacls', [bucketPath]).toString();
+
+	// /inheritance:r + /grant:r replace every inherited and explicit ACE
+	// with just the current user — the default Everyone/Users grants a
+	// fresh directory gets from its parent must not survive that.
+	assert.ok(!output.includes('Everyone'), `expected no Everyone ACE, got:\n${output}`);
+	assert.ok(!/BUILTIN\\Users/i.test(output), `expected no BUILTIN\\Users ACE, got:\n${output}`);
 });
 
 test('should_skip_a_bucket_that_was_already_hardened_instead_of_re_sweeping_it', (t) => {
