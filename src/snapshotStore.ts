@@ -27,16 +27,14 @@ const HARDENED_MARKER_NAME = '.permissions-hardened';
 // inherit) makes anything created under `path` afterwards inherit the same
 // ACL automatically — matches how DIR_MODE/FILE_MODE only need to be passed
 // once per mkdirSync/writeFileSync call, not reapplied per file.
-function restrictToOwnerWindows(path: string, recursive: boolean): void {
+function restrictToOwnerWindows(path: string): void {
 	if (process.platform !== 'win32') {
 		return;
 	}
 	try {
-		const args = [path, '/inheritance:r', '/grant:r', `${process.env.USERNAME}:(OI)(CI)F`];
-		if (recursive) {
-			args.push('/T');
-		}
-		execFileSync('icacls', args, { stdio: 'ignore' });
+		execFileSync('icacls', [path, '/inheritance:r', '/grant:r', `${process.env.USERNAME}:(OI)(CI)F`], {
+			stdio: 'ignore',
+		});
 	} catch {
 		// Best-effort — a hardened ACL is a bonus, it must not block the write
 		// itself (non-NTFS volume, icacls missing, etc).
@@ -184,7 +182,7 @@ function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): voi
 	// writeIndex sees it already there and gets undefined. Gates the icacls
 	// spawn to that first time instead of once per capture.
 	if (mkdirSync(dir, { recursive: true, mode: DIR_MODE }) !== undefined) {
-		restrictToOwnerWindows(dir, false);
+		restrictToOwnerWindows(dir);
 	}
 	const path = indexPath(storeRoot, bucketId);
 	const tmpPath = `${path}.tmp`;
@@ -259,7 +257,7 @@ function applyCapture(
 
 	const blobs = blobsDir(storeRoot, bucketId);
 	if (mkdirSync(blobs, { recursive: true, mode: DIR_MODE }) !== undefined) {
-		restrictToOwnerWindows(blobs, false);
+		restrictToOwnerWindows(blobs);
 	}
 	const blobPath = join(blobs, `${contentHash}.blob`);
 	if (!existsSync(blobPath)) {
@@ -526,11 +524,13 @@ export function hardenBucketPermissions(storeRoot: string, absoluteFolderPath: s
 	}
 
 	try {
-		// Buckets created before this hardening existed (or copied in from an
-		// older Backtrail version) predate the ACL too — a single recursive pass
-		// covers the bucket dir, index, backup and every blob in one call,
-		// unlike the chmod loop below which POSIX needs per-entry.
-		restrictToOwnerWindows(dir, true);
+		// Windows ACL retrofit for legacy buckets deliberately isn't done here:
+		// an /T recursive icacls pass over a directory with existing content
+		// broke test cleanup in CI (EPERM/ENOENT on Windows) in a way that
+		// needs a real Windows machine to diagnose safely, not just a runner
+		// log. New buckets/blobs are already protected at write time
+		// (writeIndex, applyCapture) — only pre-existing Windows buckets from
+		// an older Backtrail version are left unhardened for now.
 		chmodSync(dir, DIR_MODE);
 		const idx = indexPath(storeRoot, bucketId);
 		if (existsSync(idx)) {
