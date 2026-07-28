@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
 	chmodSync,
@@ -18,6 +19,29 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const HARDENED_MARKER_NAME = '.permissions-hardened';
+
+// chmod's mode bits are POSIX-only — on Windows, fs's `mode` option only
+// toggles the read-only attribute, it doesn't restrict which other accounts
+// on the machine can read the file. icacls ships with Windows since Vista,
+// so this needs no new dependency. `(OI)(CI)` (object-inherit/container-
+// inherit) makes anything created under `path` afterwards inherit the same
+// ACL automatically — matches how DIR_MODE/FILE_MODE only need to be passed
+// once per mkdirSync/writeFileSync call, not reapplied per file.
+function restrictToOwnerWindows(path: string, recursive: boolean): void {
+	if (process.platform !== 'win32') {
+		return;
+	}
+	try {
+		const args = [path, '/inheritance:r', '/grant:r', `${process.env.USERNAME}:(OI)(CI)F`];
+		if (recursive) {
+			args.push('/T');
+		}
+		execFileSync('icacls', args, { stdio: 'ignore' });
+	} catch {
+		// Best-effort — a hardened ACL is a bonus, it must not block the write
+		// itself (non-NTFS volume, icacls missing, etc).
+	}
+}
 
 // gzip's magic bytes. Blobs written before Fase 4 (compression) are raw
 // content and never start with these — checking them lets readSnapshotContent
@@ -155,7 +179,13 @@ function readMutableIndex(storeRoot: string, bucketId: string): StoreIndex {
 
 function writeIndex(storeRoot: string, bucketId: string, index: StoreIndex): void {
 	const dir = bucketDir(storeRoot, bucketId);
-	mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+	// mkdirSync only returns a path (the first segment it created) the first
+	// time this directory comes into existence — every later capture's
+	// writeIndex sees it already there and gets undefined. Gates the icacls
+	// spawn to that first time instead of once per capture.
+	if (mkdirSync(dir, { recursive: true, mode: DIR_MODE }) !== undefined) {
+		restrictToOwnerWindows(dir, false);
+	}
 	const path = indexPath(storeRoot, bucketId);
 	const tmpPath = `${path}.tmp`;
 	const backupPath = `${path}.bak`;
@@ -227,8 +257,11 @@ function applyCapture(
 		return { version: last, changed: false };
 	}
 
-	mkdirSync(blobsDir(storeRoot, bucketId), { recursive: true, mode: DIR_MODE });
-	const blobPath = join(blobsDir(storeRoot, bucketId), `${contentHash}.blob`);
+	const blobs = blobsDir(storeRoot, bucketId);
+	if (mkdirSync(blobs, { recursive: true, mode: DIR_MODE }) !== undefined) {
+		restrictToOwnerWindows(blobs, false);
+	}
+	const blobPath = join(blobs, `${contentHash}.blob`);
 	if (!existsSync(blobPath)) {
 		// contentHash (and sizeBytes below) is always of the original content —
 		// compression is a storage detail, never part of the identity or the
@@ -493,6 +526,11 @@ export function hardenBucketPermissions(storeRoot: string, absoluteFolderPath: s
 	}
 
 	try {
+		// Buckets created before this hardening existed (or copied in from an
+		// older Backtrail version) predate the ACL too — a single recursive pass
+		// covers the bucket dir, index, backup and every blob in one call,
+		// unlike the chmod loop below which POSIX needs per-entry.
+		restrictToOwnerWindows(dir, true);
 		chmodSync(dir, DIR_MODE);
 		const idx = indexPath(storeRoot, bucketId);
 		if (existsSync(idx)) {
