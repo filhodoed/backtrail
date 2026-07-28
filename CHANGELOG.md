@@ -4,6 +4,14 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-07-28
+
+### Fixed
+
+- A disk-full or permission error during a rename correlation or a debounced repeat-save capture went uncaught, which could crash the extension host — the same failure mode the immediate capture path was already guarded against.
+- Unchecking a file in the **Monitor** view and choosing to delete its saved history didn't clear it from the **Changes** panel until the window was reloaded.
+- Snapshots on Windows had no real access-control protection — file permission bits only restrict access on macOS/Linux. New snapshots are now locked to the current user via Windows ACLs (pre-existing Windows buckets from an older version aren't retroactively hardened yet).
+
 ## [0.9.1] - 2026-07-27
 
 ### Fixed
