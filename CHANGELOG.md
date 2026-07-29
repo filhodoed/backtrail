@@ -4,6 +4,19 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] - 2026-07-29
+
+### Fixed
+
+- Tracking a folder with many large files could balloon memory use into the gigabytes during the initial baseline scan — capture now also caps by total bytes held at once, not just file count.
+- A save landing right before a delete or rename (e.g. an external tool doing a quick edit then a move) could be silently dropped instead of becoming its own version in the file's history.
+- Stopping tracking a folder — or the automatic cleanup when a baseline scan is cancelled — could silently fail to delete its saved history if the folder had already been deleted, moved, or was on a drive that's no longer connected.
+- A corrupted-but-still-valid-JSON history index could previously slip past validation and break later reads; it's now checked and, if malformed, recovered the same way a fully corrupted index already was.
+
+### Changed
+
+- Previously-silent internal failures (a disk-full error, a folder that briefly went offline) are now recorded in a new "Backtrail" output channel, for easier troubleshooting.
+
 ## [0.9.3] - 2026-07-28
 
 ### Fixed
