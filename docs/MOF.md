@@ -68,6 +68,8 @@ functions:
       - 'Disparar baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)'
       - 'Marcar arquivo ativo como visto a cada troca de editor'
       - 'Reiniciar o watcher de uma única pasta quando um caminho dela é excluído (onExclusionChanged, Fase 5, 27/07) — mesma mecânica de restart usada por onFolderTracked/onFolderUntracked, mas escopada a uma pasta só'
+      - 'Fase 6 (28/07): criar o output channel "Backtrail" na ativação e passar um logWarning (fechado sobre esse channel) para startWatching/watchTrackedFolder — ver notas de F_WATCH e a entrada abaixo sobre catches antes silenciosos'
+      - 'Fase 6 (28/07): em onFolderTracked, persistir o bucketId da pasta (F_REGISTRY.recordBucketId) enquanto ela ainda existe no disco — é o único fallback que F_DELETE_BUCKET tem quando a pasta já sumiu no momento do untrack'
     non_responsibilities:
       - 'NÃO contém lógica de captura, armazenamento ou filtragem — só orquestra'
     entities: ['PastaRastreada']
@@ -79,10 +81,10 @@ functions:
         - 'BacktrailApi — objeto exposto para testes de integração (globalState, storeRoot, providers)'
       state: 'stateful: Map<folder, Disposable> de watchers ativos na memória da sessão'
       side_effects:
-        database: 'globalState + storeRoot (via funções que orquestra)'
+        database: 'globalState (backtrail.trackedFolders, backtrail.bucketIds) + storeRoot (via funções que orquestra)'
         events_published: ['EVT_FOLDER_TRACKED', 'EVT_FOLDER_UNTRACKED']
         events_consumed: ['EVT_EDITOR_CHANGED', 'EVT_SNAPSHOT_CAPTURED']
-        external_calls: ['VS Code API (TreeView, FileDecorationProvider, withProgress)']
+        external_calls: ['VS Code API (TreeView, FileDecorationProvider, withProgress, createOutputChannel)']
     boundaries:
       depends_on:
         [
@@ -123,19 +125,21 @@ functions:
       - 'Listar, adicionar e remover pastas rastreadas persistidas em globalState (chave backtrail.trackedFolders)'
       - 'Resolver se um caminho absoluto pertence a alguma pasta rastreada (resolveTrackedFolder)'
       - 'Filtrar entradas corrompidas defensivamente na leitura'
+      - 'Fase 6 (28/07): persistir e recuperar o bucketId de cada pasta (globalState backtrail.bucketIds, Record<folder, bucketId>) via getBucketId/recordBucketId/forgetBucketId — fallback para quando F_DELETE_BUCKET precisa apagar o histórico de uma pasta que já não existe mais no disco (ver nota em F_DELETE_BUCKET)'
     non_responsibilities:
       - 'NÃO inicia/para watchers nem atualiza views — isso é do orquestrador (F_ACTIVATE)'
       - 'NÃO valida se a pasta existe no disco'
+      - 'NÃO calcula o bucketId sozinho (isso é bucketIdFor, em F_CAPTURE) — só guarda o valor que o caller já calculou, deliberadamente sem importar snapshotStore.ts (mantém F_REGISTRY testável sem depender do formato de armazenamento)'
     entities: ['PastaRastreada']
     interfaces:
-      code_ref: 'src/trackedFolders.ts (listTrackedFolders, isTracked, trackFolder, untrackFolder, resolveTrackedFolder)'
+      code_ref: 'src/trackedFolders.ts (listTrackedFolders, isTracked, trackFolder, untrackFolder, resolveTrackedFolder, getBucketId, recordBucketId, forgetBucketId)'
       inputs:
         - 'store: KeyValueStore (abstração do Memento) + caminho absoluto'
       outputs:
-        - 'string[] de pastas; ResolvedTrackedFolder {folder, relPath} | undefined'
+        - 'string[] de pastas; ResolvedTrackedFolder {folder, relPath} | undefined; bucketId: string | undefined'
       state: 'stateless (persistência delegada ao KeyValueStore)'
       side_effects:
-        database: 'globalState: backtrail.trackedFolders'
+        database: 'globalState: backtrail.trackedFolders, backtrail.bucketIds'
         events_published: []
         events_consumed: []
         external_calls: []
@@ -154,6 +158,7 @@ functions:
         ]
     notes:
       - 'KeyValueStore é a interface que permite testes unitários sem VS Code'
+      - 'backtrail.bucketIds vive numa chave separada de backtrail.trackedFolders (Fase 6, 28/07) para não migrar o formato do array já existente — recordBucketId/forgetBucketId fazem leitura-modificação-escrita completa do mapa a cada chamada, aceitável dado o volume (uma pasta rastreada por vez, não por evento de arquivo)'
 
   - id: 'F_EXCLUDED_PATHS'
     name: 'Registro de Caminhos Excluídos por Pasta'
@@ -235,7 +240,7 @@ functions:
         - 'void — feedback via mensagens'
       state: 'stateless'
       side_effects:
-        database: 'globalState: backtrail.trackedFolders'
+        database: 'globalState: backtrail.trackedFolders, backtrail.bucketIds'
         events_published: ['EVT_FOLDER_UNTRACKED']
         events_consumed: []
         external_calls: ['VS Code API (updateWorkspaceFolders)']
@@ -244,6 +249,7 @@ functions:
       exposed_to: ['usuário (comando VS Code)', 'F_ACTIVATE']
     notes:
       - 'A pergunta de exclusão de histórico é assíncrona e não é aguardada pelo comando — evita que um teste de integração headless trave esperando resposta de UI; o untrack em si (globalState) sempre completa de imediato, como antes.'
+      - "Fase 6 (28/07): untrackFolderCommand lê o bucketId persistido (F_REGISTRY.getBucketId) ANTES de qualquer coisa, para ter um fallback pronto se a pasta já não existir quando o usuário responder 'Delete Saved History'; forgetBucketId roda logo após o untrack, nas duas escolhas (deletar ou manter histórico) — se o usuário retrackar a mesma pasta depois, onFolderTracked regrava o id na hora. untrackAndForget (em F_ACTIVATE) segue o mesmo padrão."
 
   - id: 'F_STOP_TRACKING_PATH'
     name: 'Parar de Rastrear um Caminho'
@@ -316,7 +322,7 @@ functions:
       - 'Criar FileSystemWatcher (**/*) por pasta rastreada e capturar snapshot a cada create/change não ignorado'
       - 'Registrar deleções como pendentes para correlação de rename (janela de 5s)'
       - 'Aplicar janela de graça de 500ms antes de finalizar arquivo aparentemente novo sob série nova (create pode chegar antes do delete do mesmo rename)'
-      - 'Debounce de 15s (configurável) para saves consecutivos de um relPath que já tem série ativa — reagenda o timer a cada evento e só captura o conteúdo do disco (o mais recente, não o do evento que disparou) quando o arquivo fica quieto pelo período configurado (Fase 3, 26/07)'
+      - 'Debounce de 15s (configurável) para saves consecutivos de um relPath que já tem série ativa — lê o conteúdo imediatamente a cada evento (guardado em memória junto do timer) e só ADIA A GRAVAÇÃO no índice até o arquivo ficar quieto pelo período configurado (Fase 3, 26/07; leitura antecipada em vez de leitura no disparo do timer, Fase 6, 28/07 — ver nota abaixo)'
       - 'Notificar consumidores via callback onCapture após cada captura (imediata ou debounced)'
     non_responsibilities:
       - 'NÃO decide o que é ignorado (delega a F_IGNORE) nem como armazenar (delega a F_CAPTURE)'
@@ -340,7 +346,7 @@ functions:
     notes:
       - 'Callbacks do watcher engolem exceções: um throw não tratado ali derruba o extension host inteiro'
       - 'Constantes: RENAME_CORRELATION_WINDOW_MS=5000, RENAME_GRACE_WINDOW_MS=500, DEFAULT_CAPTURE_DEBOUNCE_SECONDS=15 (backtrail.captureDebounceSeconds)'
-      - 'captureIfNotIgnored checa findActiveSeriesId (só índice, já cacheado) ANTES de ler o conteúdo do arquivo — se há série ativa, o conteúdo só é lido quando o timer de debounce dispara, nunca no evento que o agendou'
+      - 'Fase 6 (28/07): scheduleDebouncedCapture costumava só reler o arquivo quando o timer disparava — se um delete/rename chegasse antes disso, o readFileSync do disparo falhava (ENOENT) e a edição pendente era descartada em silêncio (catch vazio). Agora captureIfNotIgnored lê o conteúdo NA HORA do evento e guarda os bytes junto do timer (PendingCapture); o timer só decide QUANDO persistir, nunca mais precisa reler o disco. registerPendingDeletion (o handler de delete) também flusha essa captura pendente antes de montar o registro de correlação de rename — sem isso, um rename no meio da janela de debounce comparia o hash pré-edição (ainda no índice) contra o hash pós-edição que o lado create acabou de ler, e nunca correlacionava. Custo aceito: um read síncrono por evento em vez de só no disparo do timer — trade-off documentado, ver README § Known limitations'
 
   - id: 'F_BASELINE'
     name: 'Capturar Baseline de Pasta Recém-Rastreada'
@@ -478,6 +484,7 @@ functions:
       - 'readIndex cacheia o StoreIndex parseado em memória, keyed pelo caminho do index.json e pelo mtime do arquivo (Fase 2 de performance, 26/07) — uma escrita de outra janela ou ferramenta externa muda o mtime e o cache é ignorado na próxima leitura, sem mensageria de invalidação. Leituras puras (listVersions/findActiveSeriesId/listActiveFiles) compartilham o objeto cacheado sem cópia — é o caminho quente da decoração do Explorer'
       - 'Caminhos de escrita (F_CAPTURE, F_PRUNE) NUNCA usam o objeto do cache diretamente — chamam readMutableIndex, que faz cópia rasa do mapa de séries antes de mutar. Sem isso, uma escrita que falhasse depois de mutar o índice em memória deixaria o cache à frente do disco (leituras mostrando uma versão nunca persistida). Ver IR_012'
       - 'readSnapshotContent detecta blob gzip pelos magic bytes (1f 8b) e descomprime antes de conferir o hash; blob sem magic bytes é lido como raw (formato pré-Fase-4) — os dois formatos convivem no mesmo bucket indefinidamente, sem migração (Fase 4, 27/07, ADR-0001)'
+      - 'Fase 6 (28/07): parseIndexFile costumava fazer JSON.parse(...) as StoreIndex — um cast, não uma checagem. JSON válido com formato errado (ex.: {"series": "string"} ou uma versão sem contentHash) passava despercebido e só quebrava mais tarde, em algum consumidor que nunca valida de novo. parseStoreIndex(value: unknown) agora valida series e cada SnapshotVersion antes de aceitar o índice; formato malformado é tratado exatamente como JSON corrompido (fallback para .bak, depois para índice vazio) — mesmo caminho de recuperação de IR_012, não um novo'
 
   - id: 'F_PRUNE'
     name: 'Aplicar Retenção de Snapshots'
@@ -517,13 +524,14 @@ functions:
     status: 'verified'
     responsibilities:
       - 'Remover o bucket inteiro (index.json, .bak, blobs/) de uma pasta rastreada — rmSync recursivo, no-op se o bucket não existir'
+      - 'Fase 6 (28/07): deleteBucketById(storeRoot, bucketId) — a mesma remoção, mas por id direto, sem depender de bucketIdFor/realpathSync'
     non_responsibilities:
       - 'NÃO decide QUANDO apagar nem SE deve confirmar com o usuário — isso é responsabilidade do caller (F_UNTRACK_FOLDER pergunta; untrackAndForget em F_ACTIVATE apaga sem perguntar)'
     entities: ['SérieDeVersões', 'Blob']
     interfaces:
-      code_ref: 'src/snapshotStore.ts:deleteBucket'
+      code_ref: 'src/snapshotStore.ts:deleteBucket,deleteBucketById'
       inputs:
-        - 'storeRoot, absoluteFolderPath'
+        - 'storeRoot, absoluteFolderPath, fallbackBucketId?: string'
       outputs:
         - 'void'
       state: 'stateless'
@@ -538,6 +546,7 @@ functions:
     notes:
       - 'Adicionada na Fase 1 de hardening (26/07) — implementa a decisão do owner de que untrack deve poder apagar o histórico da pasta, em vez de deixá-lo órfão no storeRoot para sempre'
       - 'Junto com F_PRUNE, é a segunda função que DELETA dados do store — irreversível, sem teste de regressão não se mexe aqui'
+      - 'Fase 6 (28/07): deleteBucket tentava bucketIdFor(absoluteFolderPath) incondicionalmente — se a pasta já não existisse (deletada/movida/desmontada), realpathSync lançava e a exclusão falhava em silêncio (unhandled rejection nos dois call sites, que são fire-and-forget: F_UNTRACK_FOLDER e untrackAndForget). Agora aceita um fallbackBucketId opcional (persistido em F_REGISTRY no momento do tracking) — usado só quando bucketIdFor falha; quando a pasta ainda existe, o comportamento é idêntico ao de antes. Sem fallback e sem a pasta, é no-op — não há como saber qual bucket era dela, e não vale a pena adivinhar.'
 
   - id: 'F_PURGE_PATH'
     name: 'Purgar Histórico Sob um Caminho Excluído'

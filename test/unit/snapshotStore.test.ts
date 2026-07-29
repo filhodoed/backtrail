@@ -19,9 +19,11 @@ import {
 	captureSnapshot,
 	captureSnapshotsBatch,
 	deleteBucket,
+	deleteBucketById,
 	findActiveSeriesId,
 	hardenBucketPermissions,
 	listVersions,
+	parseStoreIndex,
 	pruneOlderThan,
 	purgePath,
 	readSnapshotContent,
@@ -393,6 +395,73 @@ test('should_self_heal_a_corrupt_index_on_the_next_capture', (t) => {
 	assert.equal(versions[0].relPath, 'depois.md');
 });
 
+test('should_treat_valid_json_with_a_malformed_shape_as_empty_instead_of_throwing', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('antes da corrupção'), false);
+	// Valid JSON, invalid StoreIndex shape (series pointing at a string).
+	writeFileSync(join(storeRoot, bucketId, 'index.json'), JSON.stringify({ series: 'not an object' }));
+
+	const seriesId = findActiveSeriesId(storeRoot, folder, 'notas.md');
+
+	assert.equal(seriesId, undefined);
+});
+
+test('should_self_heal_a_malformed_but_valid_json_index_on_the_next_capture', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('antes da corrupção'), false);
+	writeFileSync(
+		join(storeRoot, bucketId, 'index.json'),
+		JSON.stringify({ series: { 'series-1': [{ relPath: 'notas.md' }] } }),
+	);
+
+	captureSnapshot(storeRoot, folder, 'series-2', 'depois.md', Buffer.from('depois da corrupção'), false);
+	const versions = listVersions(storeRoot, folder, 'series-2');
+
+	assert.equal(versions.length, 1);
+	assert.equal(versions[0].relPath, 'depois.md');
+});
+
+test('should_accept_a_well_formed_store_index', () => {
+	const index = {
+		series: {
+			'series-1': [
+				{ relPath: 'a.md', timestamp: new Date().toISOString(), sizeBytes: 3, isBinary: false, contentHash: 'x' },
+			],
+		},
+	};
+
+	assert.deepEqual(parseStoreIndex(index), index);
+});
+
+test('should_reject_a_store_index_missing_the_series_field', () => {
+	assert.equal(parseStoreIndex({}), undefined);
+});
+
+test('should_reject_a_store_index_whose_series_is_not_an_object', () => {
+	assert.equal(parseStoreIndex({ series: 'nope' }), undefined);
+	assert.equal(parseStoreIndex({ series: ['nope'] }), undefined);
+});
+
+test('should_reject_a_store_index_whose_series_values_are_not_arrays', () => {
+	assert.equal(parseStoreIndex({ series: { 'series-1': 'nope' } }), undefined);
+});
+
+test('should_reject_a_store_index_with_a_malformed_version_entry', () => {
+	assert.equal(parseStoreIndex({ series: { 'series-1': [{ relPath: 'a.md' }] } }), undefined);
+});
+
+test('should_reject_non_object_input', () => {
+	assert.equal(parseStoreIndex(null), undefined);
+	assert.equal(parseStoreIndex('not an object'), undefined);
+	assert.equal(parseStoreIndex(42), undefined);
+});
+
 test('should_write_the_index_only_once_for_a_whole_batch', (t) => {
 	const storeRoot = makeTempDir(t, 'backtrail-store-');
 	const folder = makeTempDir(t, 'backtrail-folder-');
@@ -537,6 +606,52 @@ test('should_be_a_no_op_deleting_a_bucket_that_was_never_created', (t) => {
 	const folder = makeTempDir(t, 'backtrail-folder-');
 
 	assert.doesNotThrow(() => deleteBucket(storeRoot, folder));
+});
+
+test('should_delete_a_bucket_directly_by_id', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	deleteBucketById(storeRoot, bucketId);
+
+	assert.equal(existsSync(join(storeRoot, bucketId)), false);
+});
+
+test('should_be_a_no_op_deleting_by_id_a_bucket_that_was_never_created', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+
+	assert.doesNotThrow(() => deleteBucketById(storeRoot, 'never-existed'));
+});
+
+test('should_fall_back_to_the_given_bucket_id_when_the_folder_no_longer_exists', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = mkdtempSync(join(tmpdir(), 'backtrail-vanishing-folder-'));
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	rmSync(folder, { recursive: true, force: true });
+
+	// realpathSync(folder) now throws (ENOENT) — without the fallback id,
+	// deleteBucket would have no way to know which bucket was ever this
+	// folder's.
+	deleteBucket(storeRoot, folder, bucketId);
+
+	assert.equal(existsSync(join(storeRoot, bucketId)), false);
+});
+
+test('should_be_a_no_op_deleting_a_missing_folders_bucket_with_no_fallback_id_given', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = mkdtempSync(join(tmpdir(), 'backtrail-vanishing-folder-'));
+	const bucketId = bucketIdFor(folder);
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+	rmSync(folder, { recursive: true, force: true });
+
+	assert.doesNotThrow(() => deleteBucket(storeRoot, folder));
+	// Nothing to identify the bucket by, so it's left untouched rather than guessed at.
+	assert.equal(existsSync(join(storeRoot, bucketId)), true);
 });
 
 test('should_restrict_bucket_and_blob_permissions_after_hardening_a_legacy_bucket', (t) => {

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+	forgetBucketId,
+	getBucketId,
 	isTracked,
 	listTrackedFolders,
+	recordBucketId,
 	resolveTrackedFolder,
 	trackFolder,
 	untrackFolder,
@@ -124,4 +127,63 @@ test('should_pick_first_matching_folder_when_multiple_are_tracked', () => {
 	);
 
 	assert.deepEqual(result, { folder: '/Users/edsonjunior/notes', relPath: 'a.md' });
+});
+
+test('should_return_undefined_for_a_folder_with_no_recorded_bucket_id', () => {
+	const store = createFakeStore();
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), undefined);
+});
+
+test('should_record_and_retrieve_a_bucket_id_for_a_folder', async () => {
+	const store = createFakeStore();
+
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-abc');
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), 'bucket-abc');
+});
+
+test('should_record_bucket_ids_for_multiple_folders_independently', async () => {
+	const store = createFakeStore();
+
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-notes');
+	await recordBucketId(store, '/Users/edsonjunior/docs', 'bucket-docs');
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), 'bucket-notes');
+	assert.equal(getBucketId(store, '/Users/edsonjunior/docs'), 'bucket-docs');
+});
+
+test('should_overwrite_a_previously_recorded_bucket_id_for_the_same_folder', async () => {
+	const store = createFakeStore();
+
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-old');
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-new');
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), 'bucket-new');
+});
+
+test('should_forget_a_recorded_bucket_id', async () => {
+	const store = createFakeStore();
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-abc');
+
+	await forgetBucketId(store, '/Users/edsonjunior/notes');
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), undefined);
+});
+
+test('should_forget_one_bucket_id_without_disturbing_another_folders_entry', async () => {
+	const store = createFakeStore();
+	await recordBucketId(store, '/Users/edsonjunior/notes', 'bucket-notes');
+	await recordBucketId(store, '/Users/edsonjunior/docs', 'bucket-docs');
+
+	await forgetBucketId(store, '/Users/edsonjunior/notes');
+
+	assert.equal(getBucketId(store, '/Users/edsonjunior/notes'), undefined);
+	assert.equal(getBucketId(store, '/Users/edsonjunior/docs'), 'bucket-docs');
+});
+
+test('should_be_a_no_op_forgetting_a_bucket_id_that_was_never_recorded', async () => {
+	const store = createFakeStore();
+
+	await assert.doesNotReject(forgetBucketId(store, '/Users/edsonjunior/notes'));
 });

@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { markFolderAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { isInsideGitRepo } from './gitGuard';
 import { deleteBucket } from './snapshotStore';
-import { trackFolder, untrackFolder } from './trackedFolders';
+import { forgetBucketId, getBucketId, trackFolder, untrackFolder } from './trackedFolders';
 
 export const ADD_FOLDER_COMMAND = 'backtrail.addFolder';
 export const ADD_FOLDER_BY_PATH_COMMAND = 'backtrail.addFolderByPath';
@@ -151,6 +151,12 @@ async function untrackFolderCommand(
 	onFolderUntracked: (folder: string) => void,
 ): Promise<void> {
 	try {
+		// Captured before untrackFolder/forgetBucketId below touch globalState —
+		// this is the only fallback deleteBucket has left if the folder itself
+		// is already gone (deleted, moved, unmounted) by the time the user
+		// answers the prompt below.
+		const fallbackBucketId = getBucketId(context.globalState, folder);
+
 		await untrackFolder(context.globalState, folder);
 		onFolderUntracked(folder);
 
@@ -169,9 +175,10 @@ async function untrackFolderCommand(
 			)
 			.then((choice) => {
 				if (choice === deleteAction) {
-					deleteBucket(storeRoot, folder);
+					deleteBucket(storeRoot, folder, fallbackBucketId);
 				}
 			});
+		await forgetBucketId(context.globalState, folder);
 
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);
