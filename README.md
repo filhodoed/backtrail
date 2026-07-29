@@ -60,6 +60,7 @@ This extension contributes the following settings:
 ## Known limitations
 
 - A rename performed outside VS Code is only recognized if the new file appears within 5 seconds of the old one being deleted, with identical content. A rename combined with an edit in the same instant may not be recognized as a continuation.
+- Consecutive saves of an already-tracked file collapse into one version once the file goes quiet (see `backtrail.captureDebounceSeconds`). A rename or delete that lands mid-debounce is flushed as its own version first, so no edit is lost — but tools that save via a temp-file-then-rename pattern in very quick succession may still see that flush land as a slightly different intermediate version than you'd get from watching every keystroke.
 - Snapshots are stored unencrypted in VS Code's global storage for the extension, readable only by your own user account (files and folders there are created with owner-only permissions). Don't track folders with secrets you wouldn't want readable on disk.
 - Tracking state and history don't sync across machines.
 

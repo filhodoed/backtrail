@@ -15,11 +15,12 @@ import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerMonitorCheckboxHandler } from './monitorCommands';
 import { MonitorProvider, type MonitorNode } from './monitorProvider';
+import { logCaptureWarning } from './outputChannel';
 import { registerRestoreCommand } from './restoreCommand';
-import { deleteBucket, hardenBucketPermissions, pruneOlderThan } from './snapshotStore';
+import { bucketIdFor, deleteBucket, hardenBucketPermissions, pruneOlderThan } from './snapshotStore';
 import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
 import { TrackedFoldersProvider } from './trackedFoldersProvider';
-import { listTrackedFolders, untrackFolder } from './trackedFolders';
+import { forgetBucketId, getBucketId, listTrackedFolders, recordBucketId, untrackFolder } from './trackedFolders';
 
 export const PRUNE_NOW_COMMAND = 'backtrail.pruneNow';
 
@@ -42,6 +43,11 @@ export interface BacktrailApi {
 
 export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	const storeRoot = context.globalStorageUri.fsPath;
+
+	const outputChannel = vscode.window.createOutputChannel('Backtrail');
+	context.subscriptions.push(outputChannel);
+	const logWarning = (warningContext: string, error: unknown, metadata?: Record<string, string>) =>
+		logCaptureWarning(outputChannel, warningContext, error, metadata);
 
 	const historyProvider = new BacktrailHistoryProvider(context, storeRoot);
 	context.subscriptions.push(vscode.window.createTreeView('backtrail.history', { treeDataProvider: historyProvider }));
@@ -139,12 +145,14 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 						}
 					},
 					getCaptureDebounceSeconds(),
+					logWarning,
 				),
 			);
-		} catch {
+		} catch (error) {
 			// A tracked folder that's gone (moved, deleted, unmounted drive)
 			// must not abort activation — every other folder, and command
 			// registration itself, still needs to happen below.
+			logWarning('startWatching', error, { folder });
 		}
 	}
 
@@ -159,7 +167,10 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 		// entirely" — unlike the manual Stop Tracking command, there's no
 		// history worth confirming about yet (the baseline that would have
 		// seeded it never finished), so the bucket is deleted unconditionally.
-		deleteBucket(storeRoot, folder);
+		// fallbackBucketId covers the folder-vanished-mid-scan case, using the
+		// id recorded when tracking started (see onFolderTracked below).
+		deleteBucket(storeRoot, folder, getBucketId(context.globalState, folder));
+		await forgetBucketId(context.globalState, folder);
 		await untrackFolder(context.globalState, folder);
 		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
 		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);
@@ -171,6 +182,16 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	}
 
 	function onFolderTracked(folder: string): void {
+		// Persist the bucketId now, while the folder is known to exist (it
+		// was just picked/typed and validated) — this is the only fallback
+		// deleteBucket has for a folder that's gone by the time it's
+		// untracked (see untrackAndForget above and untrackFolderCommand).
+		try {
+			void recordBucketId(context.globalState, folder, bucketIdFor(folder));
+		} catch (error) {
+			logWarning('onFolderTracked (recordBucketId)', error, { folder });
+		}
+
 		// The watcher starts immediately rather than waiting on the baseline
 		// scan below — a large folder's baseline can take a while now that
 		// it no longer blocks the extension host, and real edits made while

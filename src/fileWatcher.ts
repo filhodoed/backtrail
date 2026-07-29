@@ -40,12 +40,26 @@ interface TrackedPendingDeletion extends PendingDeletion {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+// Content read at onDidChange/onDidCreate time and held until the debounce
+// timer decides to persist it (or a delete/rename flushes it early — see
+// registerPendingDeletion). Keeping the bytes here means the timer never
+// needs to re-read the file, so a delete/rename that lands before the
+// debounce window elapses can't silently drop the edit the way re-reading
+// from a now-missing path would.
+interface PendingCapture {
+	timer: ReturnType<typeof setTimeout>;
+	content: Buffer;
+}
+
+export type WarningHandler = (context: string, error: unknown, metadata?: Record<string, string>) => void;
+
 export function watchTrackedFolder(
 	absoluteFolderPath: string,
 	storeRoot: string,
 	ignoreConfig: IgnoreConfig = DEFAULT_IGNORE_CONFIG,
 	onCapture?: (uri: vscode.Uri) => void,
 	captureDebounceSeconds: number = DEFAULT_CAPTURE_DEBOUNCE_SECONDS,
+	onWarning?: WarningHandler,
 ): vscode.Disposable {
 	const folderUri = vscode.Uri.file(absoluteFolderPath);
 	const pattern = new vscode.RelativePattern(folderUri, '**/*');
@@ -53,7 +67,7 @@ export function watchTrackedFolder(
 
 	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
 	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
-	const captureDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const captureDebounceTimers = new Map<string, PendingCapture>();
 	const captureDebounceMs = captureDebounceSeconds * 1000;
 
 	// Watcher callbacks run outside any caller's try/catch — an uncaught throw
@@ -73,15 +87,23 @@ export function watchTrackedFolder(
 				captureDebounceMs,
 				onCapture,
 			);
-		} catch {
-			// See comment above.
+		} catch (error) {
+			onWarning?.('onCreateOrChange', error);
 		}
 	};
 	const onDelete = (uri: vscode.Uri) => {
 		try {
-			registerPendingDeletion(absoluteFolderPath, storeRoot, uri, pendingDeletions);
-		} catch {
-			// See comment above onCreateOrChange.
+			registerPendingDeletion(
+				absoluteFolderPath,
+				storeRoot,
+				uri,
+				pendingDeletions,
+				captureDebounceTimers,
+				onCapture,
+				onWarning,
+			);
+		} catch (error) {
+			onWarning?.('onDelete', error);
 		}
 	};
 
@@ -94,7 +116,7 @@ export function watchTrackedFolder(
 			clearTimeout(timer);
 		}
 		pendingCaptureTimers.clear();
-		for (const timer of captureDebounceTimers.values()) {
+		for (const { timer } of captureDebounceTimers.values()) {
 			clearTimeout(timer);
 		}
 		captureDebounceTimers.clear();
@@ -111,10 +133,14 @@ export function watchTrackedFolder(
 
 // Chunk size for baseline capture: large enough that the per-chunk index
 // read/write (O(chunk) not O(1)) stays a rounding error against a walk of
-// hundreds of thousands of files, small enough that memory stays bounded
-// (only one chunk's file contents held at once) and the extension host gets
-// to breathe between chunks instead of blocking for the whole walk.
-const BASELINE_CHUNK_SIZE = 200;
+// hundreds of thousands of files, small enough that the extension host gets
+// to breathe between chunks instead of blocking for the whole walk. This
+// alone doesn't bound memory — a folder full of large files (each up to
+// maxFileSizeBytes, 50MB by default) could hold 200 of them at once, tens of
+// GB in the worst case — so BASELINE_CHUNK_MAX_BYTES below is the actual
+// memory cap; whichever threshold is hit first flushes the chunk.
+const BASELINE_CHUNK_MAX_FILES = 200;
+const BASELINE_CHUNK_MAX_BYTES = 32 * 1024 * 1024;
 
 // A tracked file saved repeatedly in quick succession (an actively-appended
 // log, a session transcript, an autosave loop) used to plant one version per
@@ -150,6 +176,7 @@ export async function captureBaselineSnapshots(
 	const alreadyTracked = new Set(listActiveFiles(storeRoot, absoluteFolderPath).map((file) => file.relPath));
 
 	let chunk: CaptureInput[] = [];
+	let chunkBytes = 0;
 
 	for (const absolutePath of walkFiles(absoluteFolderPath, ignoreConfig.ignoredFolders)) {
 		if (token?.isCancellationRequested) {
@@ -178,10 +205,12 @@ export async function captureBaselineSnapshots(
 			continue;
 		}
 		chunk.push({ seriesId: randomUUID(), relPath, content, isBinary: isBinaryContent(content) });
+		chunkBytes += content.byteLength;
 
-		if (chunk.length >= BASELINE_CHUNK_SIZE) {
+		if (chunk.length >= BASELINE_CHUNK_MAX_FILES || chunkBytes >= BASELINE_CHUNK_MAX_BYTES) {
 			captureSnapshotsBatch(storeRoot, absoluteFolderPath, chunk);
 			chunk = [];
+			chunkBytes = 0;
 			await new Promise((resolve) => setImmediate(resolve));
 		}
 	}
@@ -215,11 +244,42 @@ function registerPendingDeletion(
 	storeRoot: string,
 	uri: vscode.Uri,
 	pendingDeletions: Map<string, TrackedPendingDeletion>,
+	captureDebounceTimers: Map<string, PendingCapture>,
+	onCapture?: (uri: vscode.Uri) => void,
+	onWarning?: WarningHandler,
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
 	const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
 	if (!seriesId) {
 		return;
+	}
+
+	// A save still debouncing when this delete/rename fired was already read
+	// into memory (see scheduleDebouncedCapture) but not yet persisted.
+	// Flush it now so lastVersion below — and this pending deletion's
+	// contentHash — reflect the file's real final content. Without this, a
+	// rename that lands mid-debounce wouldn't correlate: the create side
+	// reads the post-rename bytes, but this delete side would still be
+	// comparing against the pre-edit hash still sitting in the index.
+	const pendingCapture = captureDebounceTimers.get(relPath);
+	if (pendingCapture) {
+		clearTimeout(pendingCapture.timer);
+		captureDebounceTimers.delete(relPath);
+		try {
+			captureSnapshot(
+				storeRoot,
+				absoluteFolderPath,
+				seriesId,
+				relPath,
+				pendingCapture.content,
+				isBinaryContent(pendingCapture.content),
+			);
+			onCapture?.(uri);
+		} catch (error) {
+			// Same best-effort rationale as scheduleDebouncedCapture's own timer
+			// below — a write failure here must not crash the extension host.
+			onWarning?.('registerPendingDeletion (flush)', error, { relPath });
+		}
 	}
 
 	const versions = listVersions(storeRoot, absoluteFolderPath, seriesId);
@@ -260,37 +320,31 @@ function scheduleDebouncedCapture(
 	seriesId: string,
 	relPath: string,
 	uri: vscode.Uri,
-	captureDebounceTimers: Map<string, ReturnType<typeof setTimeout>>,
+	content: Buffer,
+	captureDebounceTimers: Map<string, PendingCapture>,
 	captureDebounceMs: number,
 	onCapture?: (uri: vscode.Uri) => void,
+	onWarning?: WarningHandler,
 ): void {
-	const existingTimer = captureDebounceTimers.get(relPath);
-	if (existingTimer) {
-		clearTimeout(existingTimer);
+	const existing = captureDebounceTimers.get(relPath);
+	if (existing) {
+		clearTimeout(existing.timer);
 	}
 
 	const timer = setTimeout(() => {
 		captureDebounceTimers.delete(relPath);
-
-		let content: Buffer;
-		try {
-			content = readFileSync(uri.fsPath);
-		} catch {
-			// Gone by the time the quiet window elapsed (deleted, or renamed away
-			// mid-debounce) — nothing left on disk to capture.
-			return;
-		}
 		try {
 			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
 			onCapture?.(uri);
-		} catch {
+		} catch (error) {
 			// This timer fires after the sync handler that scheduled it already
 			// returned, so it's outside that handler's try/catch — an uncaught
 			// throw here (disk full, permission denied) would crash the extension
 			// host same as an uncaught throw in the sync path. Best-effort: skip.
+			onWarning?.('scheduleDebouncedCapture', error, { relPath });
 		}
 	}, captureDebounceMs);
-	captureDebounceTimers.set(relPath, timer);
+	captureDebounceTimers.set(relPath, { timer, content });
 }
 
 function captureIfNotIgnored(
@@ -300,9 +354,10 @@ function captureIfNotIgnored(
 	ignoreConfig: IgnoreConfig,
 	pendingDeletions: Map<string, TrackedPendingDeletion>,
 	pendingCaptureTimers: Set<ReturnType<typeof setTimeout>>,
-	captureDebounceTimers: Map<string, ReturnType<typeof setTimeout>>,
+	captureDebounceTimers: Map<string, PendingCapture>,
 	captureDebounceMs: number,
 	onCapture?: (uri: vscode.Uri) => void,
+	onWarning?: WarningHandler,
 ): void {
 	const relPath = relative(absoluteFolderPath, uri.fsPath);
 
@@ -323,15 +378,20 @@ function captureIfNotIgnored(
 
 	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
 	if (existingSeriesId) {
+		// Read now, not when the debounce timer fires — a delete/rename that
+		// lands before the timer elapses must not lose this content to a
+		// re-read against a path that's no longer there (see scheduleDebouncedCapture).
 		scheduleDebouncedCapture(
 			storeRoot,
 			absoluteFolderPath,
 			existingSeriesId,
 			relPath,
 			uri,
+			readFileSync(uri.fsPath),
 			captureDebounceTimers,
 			captureDebounceMs,
 			onCapture,
+			onWarning,
 		);
 		return;
 	}
@@ -354,9 +414,10 @@ function captureIfNotIgnored(
 			const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
 			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
 			onCapture?.(uri);
-		} catch {
+		} catch (error) {
 			// See comment in scheduleDebouncedCapture's timer above — this also
 			// runs after the sync handler returned, outside its try/catch.
+			onWarning?.('captureIfNotIgnored (grace timer)', error, { relPath });
 		}
 	}, RENAME_GRACE_WINDOW_MS);
 	pendingCaptureTimers.add(graceTimer);

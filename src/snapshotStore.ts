@@ -89,6 +89,43 @@ interface StoreIndex {
 	series: Record<string, SnapshotVersion[]>;
 }
 
+function isSnapshotVersion(value: unknown): value is SnapshotVersion {
+	if (typeof value !== 'object' || value === null) {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.relPath === 'string' &&
+		typeof candidate.timestamp === 'string' &&
+		typeof candidate.sizeBytes === 'number' &&
+		typeof candidate.isBinary === 'boolean' &&
+		typeof candidate.contentHash === 'string'
+	);
+}
+
+// A JSON.parse that succeeds is not the same guarantee as a well-formed
+// index — {"series": "not an object"} or {"series": {"x": [{"relPath": 1}]}}
+// parse just fine but would break every reader downstream (readIndex's
+// callers all assume series is a Record<string, SnapshotVersion[]>). Treat
+// anything that doesn't match that shape the same way readIndex already
+// treats corrupt JSON: fall back to .bak, then to an empty index, rather
+// than handing a malformed object to code that never checks its shape again.
+export function parseStoreIndex(value: unknown): StoreIndex | undefined {
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const series = (value as Record<string, unknown>).series;
+	if (typeof series !== 'object' || series === null || Array.isArray(series)) {
+		return undefined;
+	}
+	for (const versions of Object.values(series)) {
+		if (!Array.isArray(versions) || !versions.every(isSnapshotVersion)) {
+			return undefined;
+		}
+	}
+	return value as StoreIndex;
+}
+
 export function hashContent(data: string | Uint8Array): string {
 	return createHash('sha256').update(data).digest('hex');
 }
@@ -114,7 +151,7 @@ function parseIndexFile(path: string): StoreIndex | undefined {
 		return undefined;
 	}
 	try {
-		return JSON.parse(readFileSync(path, 'utf8')) as StoreIndex;
+		return parseStoreIndex(JSON.parse(readFileSync(path, 'utf8')));
 	} catch {
 		return undefined;
 	}
@@ -516,8 +553,30 @@ export function purgePath(storeRoot: string, absoluteFolderPath: string, relPath
 // no path back to it once the folder path was gone from any list. Callers
 // decide whether that's acceptable for a given untrack (see
 // trackedFoldersCommands.ts and extension.ts's untrackAndForget).
-export function deleteBucket(storeRoot: string, absoluteFolderPath: string): void {
-	const bucketId = bucketIdFor(absoluteFolderPath);
+//
+// bucketIdFor needs realpathSync to succeed, which needs the folder to still
+// exist on disk — exactly the case that's often untrue by the time someone
+// wants to stop tracking a folder (deleted, moved, unmounted drive). Callers
+// that persisted a bucketId at tracking time (trackedFolders.ts's
+// recordBucketId) can pass it as fallbackBucketId so the delete still goes
+// through; without one, a folder that's already gone is a silent no-op —
+// there's no way to know which bucket was ever its, and throwing here would
+// only surface as an unhandled rejection two callers up (both call sites are
+// fire-and-forget), not as anything the user could act on.
+export function deleteBucket(storeRoot: string, absoluteFolderPath: string, fallbackBucketId?: string): void {
+	let bucketId: string;
+	try {
+		bucketId = bucketIdFor(absoluteFolderPath);
+	} catch {
+		if (fallbackBucketId === undefined) {
+			return;
+		}
+		bucketId = fallbackBucketId;
+	}
+	deleteBucketById(storeRoot, bucketId);
+}
+
+export function deleteBucketById(storeRoot: string, bucketId: string): void {
 	const dir = bucketDir(storeRoot, bucketId);
 	if (existsSync(dir)) {
 		rmSync(dir, { recursive: true, force: true });

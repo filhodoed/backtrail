@@ -181,7 +181,7 @@ suite('File Watcher Integration', () => {
 	});
 
 	test('baseline capture chunks large trees and yields between chunks instead of blocking', async () => {
-		const fileCount = 450; // more than two BASELINE_CHUNK_SIZE (200) chunks
+		const fileCount = 450; // more than two BASELINE_CHUNK_MAX_FILES (200) chunks
 		for (let i = 0; i < fileCount; i++) {
 			writeFileSync(join(trackedFolder, `arquivo-${i}.md`), `conteúdo ${i}`);
 		}
@@ -278,5 +278,57 @@ suite('File Watcher Debounce', () => {
 		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS + 500));
 
 		assert.equal(listVersions(storeRoot, trackedFolder, seriesId).length, 1);
+	});
+
+	test('a delete during the debounce window flushes the pending edit instead of losing it', async () => {
+		const filePath = join(trackedFolder, 'notas.md');
+		writeFileSync(filePath, 'v1');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'notas.md') !== undefined);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'notas.md')!;
+
+		const editedContent = 'v2 — deveria sobreviver ao delete que vem logo em seguida';
+		writeFileSync(filePath, editedContent);
+		// Give the native watcher time to dispatch this as its own change event
+		// (still well inside the debounce window) before the delete below —
+		// back-to-back write+unlink on the same path with no gap can get
+		// coalesced into a single delete event by the OS watcher, which would
+		// defeat the point of this test.
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS / 2));
+		unlinkSync(filePath);
+
+		await waitUntil(() => listVersions(storeRoot, trackedFolder, seriesId).length === 2);
+
+		const versions = listVersions(storeRoot, trackedFolder, seriesId);
+		assert.equal(versions[1].relPath, 'notas.md');
+		assert.equal(versions[1].sizeBytes, Buffer.from(editedContent).byteLength);
+	});
+
+	test('a rename during the debounce window still correlates with the edit that was pending', async () => {
+		const oldPath = join(trackedFolder, 'antigo.md');
+		const newPath = join(trackedFolder, 'novo.md');
+		writeFileSync(oldPath, 'v1');
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'antigo.md') !== undefined);
+		const seriesId = findActiveSeriesId(storeRoot, trackedFolder, 'antigo.md')!;
+
+		const editedContent = 'v2 — editado pouco antes do rename';
+		writeFileSync(oldPath, editedContent);
+		// See the equivalent comment in the delete test above.
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS / 2));
+		unlinkSync(oldPath);
+		writeFileSync(newPath, editedContent);
+
+		await waitUntil(() => findActiveSeriesId(storeRoot, trackedFolder, 'novo.md') !== undefined);
+
+		// Three versions: v1, the flushed pending edit (still under the old
+		// relPath, since the flush happens before the rename is known about),
+		// and the rename entry itself under the new relPath — a rename always
+		// gets its own entry even with unchanged content (see snapshotStore's
+		// applyCapture), so the flush doesn't collapse into it.
+		assert.equal(findActiveSeriesId(storeRoot, trackedFolder, 'novo.md'), seriesId);
+		const versions = listVersions(storeRoot, trackedFolder, seriesId);
+		assert.equal(versions.length, 3);
+		assert.equal(versions[1].relPath, 'antigo.md');
+		assert.equal(versions[1].sizeBytes, Buffer.from(editedContent).byteLength);
+		assert.equal(versions[2].relPath, 'novo.md');
 	});
 });

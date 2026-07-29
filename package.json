@@ -210,7 +210,7 @@
 		"lint": "eslint src",
 		"format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
-		"test:unit": "node --test \"test/unit/**/*.test.ts\"",
+		"test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"test/unit/**/*.test.ts\"",
 		"test:integration": "vscode-test",
 		"test": "npm run test:unit && npm run test:integration",
 		"package:vsix": "vsce package"
