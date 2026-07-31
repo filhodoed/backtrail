@@ -10,8 +10,8 @@
 mof_meta:
   system_name: 'Backtrail'
   purpose: 'Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais.'
-  version: '0.6.0'
-  last_updated: '2026-07-27'
+  version: '0.8.0'
+  last_updated: '2026-07-31'
   owners: ['Edson Junior (filhodoed)']
   domains: ['Rastreamento', 'Captura', 'Armazenamento', 'Visualização', 'Restauração']
   external_dependencies: ['VS Code Extension API (^1.125.0)', 'Node.js stdlib (fs, crypto, path, os)']
@@ -62,16 +62,14 @@ functions:
     status: 'verified'
     responsibilities:
       - 'Instanciar e registrar as três tree views, o decoration provider e todos os comandos'
-      - 'Iniciar um watcher por pasta rastreada persistida e rodar prune de retenção + hardening de permissões (hardenBucketPermissions) na ativação'
+      - 'Criar o output channel "Backtrail" na ativação e um logWarning (fechado sobre esse channel), repassado a F_TRACK_LIFECYCLE'
       - 'Rodar prune de retenção periodicamente (setInterval de 24h) e sob demanda (comando backtrail.pruneNow) para toda pasta rastreada — Fase 2 de performance, 26/07'
-      - 'Coordenar callbacks de ciclo de vida (onFolderTracked/onFolderUntracked) entre comandos, watchers e views'
-      - 'Disparar baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)'
+      - 'Instanciar F_TRACK_LIFECYCLE (createTrackedFolderLifecycle) e conectá-la aos comandos (registerCommands, registerTrackedFoldersCommands, registerMonitorCheckboxHandler, registerStopTrackingPathCommand) e ao dispose de ativação'
+      - 'Iniciar o watch de toda pasta persistida na ativação, delegando a F_TRACK_LIFECYCLE.startWatching'
       - 'Marcar arquivo ativo como visto a cada troca de editor'
-      - 'Reiniciar o watcher de uma única pasta quando um caminho dela é excluído (onExclusionChanged, Fase 5, 27/07) — mesma mecânica de restart usada por onFolderTracked/onFolderUntracked, mas escopada a uma pasta só'
-      - 'Fase 6 (28/07): criar o output channel "Backtrail" na ativação e passar um logWarning (fechado sobre esse channel) para startWatching/watchTrackedFolder — ver notas de F_WATCH e a entrada abaixo sobre catches antes silenciosos'
-      - 'Fase 6 (28/07): em onFolderTracked, persistir o bucketId da pasta (F_REGISTRY.recordBucketId) enquanto ela ainda existe no disco — é o único fallback que F_DELETE_BUCKET tem quando a pasta já sumiu no momento do untrack'
     non_responsibilities:
       - 'NÃO contém lógica de captura, armazenamento ou filtragem — só orquestra'
+      - 'NÃO implementa o ciclo de vida de rastreamento de pastas (start/stop watcher, track/untrack, baseline, exclusão) — isso é F_TRACK_LIFECYCLE desde a Fase 7 (31/07, PR #50); F_ACTIVATE só instancia e conecta'
     entities: ['PastaRastreada']
     interfaces:
       code_ref: 'src/extension.ts:activate'
@@ -88,11 +86,8 @@ functions:
     boundaries:
       depends_on:
         [
-          'F_WATCH',
-          'F_BASELINE',
+          'F_TRACK_LIFECYCLE',
           'F_PRUNE',
-          'F_DELETE_BUCKET',
-          'F_STORE_QUERY',
           'F_REGISTRY',
           'F_SEEN',
           'F_HISTORY_VIEW',
@@ -111,10 +106,44 @@ functions:
         ]
       exposed_to: ['VS Code (entry point)', 'testes de integração via BacktrailApi']
     notes:
-      - 'Falha ao iniciar watcher de pasta inacessível não aborta a ativação (try/catch em startWatching)'
-      - 'Watcher inicia ANTES do baseline scan de propósito — edits reais durante o scan não podem ser perdidos; captureSnapshotsBatch resolve a corrida'
+      - 'Fase 6 (28/07): output channel "Backtrail" criado na ativação; logWarning fecha sobre ele e é repassado a F_TRACK_LIFECYCLE, que o encaminha a watchTrackedFolder — ver F_WATCH'
+      - 'backtrail.pruneNow (F_PRUNE para toda pasta rastreada) e o setInterval periódico são desfeitos no dispose de ativação; o dispose dos watchers em si é delegado a F_TRACK_LIFECYCLE.dispose() desde a Fase 7 (31/07, PR #50)'
+
+  - id: 'F_TRACK_LIFECYCLE'
+    name: 'Gerenciar Ciclo de Vida de Pastas Rastreadas'
+    type: 'Domain Service'
+    domain: 'Rastreamento'
+    status: 'verified'
+    responsibilities:
+      - 'Iniciar/parar o watcher de uma pasta (startWatching/stopWatching), incluindo hardening de permissões (hardenBucketPermissions) e prune de retenção da pasta antes do primeiro watch'
+      - 'Orquestrar onFolderTracked: persistir o bucketId (F_REGISTRY.recordBucketId) enquanto a pasta ainda existe no disco, iniciar o watcher, refrescar as 3 views e disparar o baseline scan com toast de progresso cancelável (cancelar desfaz o rastreamento inteiro)'
+      - 'Orquestrar onFolderUntracked (parar watcher + refrescar views) e untrackAndForget (cancelamento de baseline: para o watcher, apaga o bucket incondicionalmente, esquece o bucketId, desfaz o rastreio)'
+      - 'Reiniciar o watcher de uma única pasta quando um caminho dela é excluído (onExclusionChanged, Fase 5, 27/07) — mesma mecânica de restart usada por onFolderTracked/onFolderUntracked, mas escopada a uma pasta só'
+      - 'Expor dispose() que encerra todos os watchers ativos (Map<folder, Disposable>)'
+    non_responsibilities:
+      - 'NÃO registra comandos VS Code nem cria tree views — recebe as instâncias já criadas via TrackedFolderLifecycleDeps e só as chama para refresh'
+      - 'NÃO decide a política de retenção nem roda o prune periódico/sob demanda de toda a extensão (isso é F_ACTIVATE.pruneAllTrackedFolders) — só roda pruneOlderThan da pasta específica antes de iniciar o watch dela'
+    entities: ['PastaRastreada']
+    interfaces:
+      code_ref: 'src/trackedFolderLifecycle.ts:createTrackedFolderLifecycle'
+      inputs:
+        - 'deps: TrackedFolderLifecycleDeps — globalState, storeRoot, os providers (history/decoration/trackedFolders/changes/monitor) e logWarning'
+      outputs:
+        - 'TrackedFolderLifecycle — { startWatching, stopWatching, onFolderTracked, onFolderUntracked, untrackAndForget, onExclusionChanged, dispose }'
+      state: 'stateful: Map<folder, Disposable> de watchers ativos na memória da sessão'
+      side_effects:
+        database: 'globalState (backtrail.bucketIds via F_REGISTRY, backtrail.trackedFolders via untrackFolder) + storeRoot (via F_WATCH, F_BASELINE, F_DELETE_BUCKET)'
+        events_published: ['EVT_FOLDER_TRACKED', 'EVT_FOLDER_UNTRACKED']
+        events_consumed: []
+        external_calls: ['VS Code API (withProgress, updateWorkspaceFolders)']
+    boundaries:
+      depends_on: ['F_WATCH', 'F_BASELINE', 'F_STORE_QUERY', 'F_REGISTRY', 'F_DELETE_BUCKET']
+      exposed_to: ['F_ACTIVATE']
+    notes:
+      - 'Extraído de dentro do corpo de activate() na Fase 7 (31/07, PR #50) — mesmos corpos e mesma ordem de chamadas de antes, só mudou de arquivo (ver IR_008: watcher inicia ANTES do baseline; bucketId é persistido ANTES de updateWorkspaceFolders; cancelar o baseline desfaz o rastreio inteiro — as três garantias foram preservadas mecanicamente, não re-derivadas)'
+      - 'Falha ao iniciar watcher de pasta inacessível não aborta o startWatching desta pasta nem a ativação (try/catch)'
       - "untrackAndForget (cancelamento de baseline) chama F_DELETE_BUCKET incondicionalmente, sem perguntar — esse caminho já significa 'desfazer o rastreio inteiro' (Fase 1 de hardening, 26/07)"
-      - 'backtrail.pruneNow (F_PRUNE para toda pasta rastreada) e o setInterval periódico são desfeitos no dispose junto com os watchers (Fase 2 de performance, 26/07)'
+      - 'onFolderTracked persiste o bucketId da pasta (F_REGISTRY.recordBucketId) enquanto ela ainda existe no disco — é o único fallback que F_DELETE_BUCKET tem quando a pasta já sumiu no momento do untrack (Fase 6, 28/07)'
 
   - id: 'F_REGISTRY'
     name: 'Registro de Pastas Rastreadas'
@@ -127,7 +156,7 @@ functions:
       - 'Filtrar entradas corrompidas defensivamente na leitura'
       - 'Fase 6 (28/07): persistir e recuperar o bucketId de cada pasta (globalState backtrail.bucketIds, Record<folder, bucketId>) via getBucketId/recordBucketId/forgetBucketId — fallback para quando F_DELETE_BUCKET precisa apagar o histórico de uma pasta que já não existe mais no disco (ver nota em F_DELETE_BUCKET)'
     non_responsibilities:
-      - 'NÃO inicia/para watchers nem atualiza views — isso é do orquestrador (F_ACTIVATE)'
+      - 'NÃO inicia/para watchers nem atualiza views — isso é de F_TRACK_LIFECYCLE'
       - 'NÃO valida se a pasta existe no disco'
       - 'NÃO calcula o bucketId sozinho (isso é bucketIdFor, em F_CAPTURE) — só guarda o valor que o caller já calculou, deliberadamente sem importar snapshotStore.ts (mantém F_REGISTRY testável sem depender do formato de armazenamento)'
     entities: ['PastaRastreada']
@@ -148,6 +177,7 @@ functions:
       exposed_to:
         [
           'F_ACTIVATE',
+          'F_TRACK_LIFECYCLE',
           'F_TRACK_FOLDER',
           'F_UNTRACK_FOLDER',
           'F_DECORATE',
@@ -228,12 +258,12 @@ functions:
     status: 'verified'
     responsibilities:
       - 'Comando backtrail.untrackFolder: remover do registro, parar watcher (via callback), oferecer remoção da pasta do Explorer'
-      - 'Variante untrackAndForget (interna a F_ACTIVATE): usada quando o usuário cancela o baseline — desfaz o rastreamento inteiro sem perguntar'
+      - 'Variante untrackAndForget (interna a F_TRACK_LIFECYCLE): usada quando o usuário cancela o baseline — desfaz o rastreamento inteiro sem perguntar'
     non_responsibilities:
       - "Stop Tracking manual não apaga o bucket automaticamente — pergunta via warning prompt (fire-and-forget, não bloqueia o untrack em si); untrackAndForget (cancelamento de baseline) apaga incondicionalmente, sem perguntar, pois esse caminho já significa 'desfazer tudo'. Decisão do owner de 26/07 implementada em 2026-07-26 (Fase 1 de hardening)."
     entities: ['PastaRastreada']
     interfaces:
-      code_ref: 'src/trackedFoldersCommands.ts:untrackFolderCommand + src/extension.ts:untrackAndForget'
+      code_ref: 'src/trackedFoldersCommands.ts:untrackFolderCommand + src/trackedFolderLifecycle.ts:untrackAndForget'
       inputs:
         - 'folder: string — caminho absoluto (do context menu da view Tracked Folders)'
       outputs:
@@ -246,10 +276,10 @@ functions:
         external_calls: ['VS Code API (updateWorkspaceFolders)']
     boundaries:
       depends_on: ['F_REGISTRY', 'F_DELETE_BUCKET']
-      exposed_to: ['usuário (comando VS Code)', 'F_ACTIVATE']
+      exposed_to: ['usuário (comando VS Code)', 'F_TRACK_LIFECYCLE']
     notes:
       - 'A pergunta de exclusão de histórico é assíncrona e não é aguardada pelo comando — evita que um teste de integração headless trave esperando resposta de UI; o untrack em si (globalState) sempre completa de imediato, como antes.'
-      - "Fase 6 (28/07): untrackFolderCommand lê o bucketId persistido (F_REGISTRY.getBucketId) ANTES de qualquer coisa, para ter um fallback pronto se a pasta já não existir quando o usuário responder 'Delete Saved History'; forgetBucketId roda logo após o untrack, nas duas escolhas (deletar ou manter histórico) — se o usuário retrackar a mesma pasta depois, onFolderTracked regrava o id na hora. untrackAndForget (em F_ACTIVATE) segue o mesmo padrão."
+      - "Fase 6 (28/07): untrackFolderCommand lê o bucketId persistido (F_REGISTRY.getBucketId) ANTES de qualquer coisa, para ter um fallback pronto se a pasta já não existir quando o usuário responder 'Delete Saved History'; forgetBucketId roda logo após o untrack, nas duas escolhas (deletar ou manter histórico) — se o usuário retrackar a mesma pasta depois, onFolderTracked regrava o id na hora. untrackAndForget (agora em F_TRACK_LIFECYCLE, Fase 7) segue o mesmo padrão."
 
   - id: 'F_STOP_TRACKING_PATH'
     name: 'Parar de Rastrear um Caminho'
@@ -329,7 +359,7 @@ functions:
       - 'NÃO aplica debounce à correlação de rename — só ao caminho de série já ativa (existingSeriesId); create/delete seguem imediatos para não atrasar o match contra a janela de 5s'
     entities: ['SérieDeVersões']
     interfaces:
-      code_ref: 'src/fileWatcher.ts:watchTrackedFolder,captureIfNotIgnored,scheduleDebouncedCapture,registerPendingDeletion,consumeMatchingPendingDeletion'
+      code_ref: 'src/fileWatcher.ts:watchTrackedFolder,createWatcherSession,captureIfNotIgnored,scheduleDebouncedCapture,registerPendingDeletion,consumeMatchingPendingDeletion'
       inputs:
         - 'absoluteFolderPath, storeRoot, ignoreConfig, onCapture?: (uri) => void, captureDebounceSeconds = 15'
       outputs:
@@ -342,11 +372,12 @@ functions:
         external_calls: ['VS Code createFileSystemWatcher']
     boundaries:
       depends_on: ['F_IGNORE', 'F_BINARY', 'F_CAPTURE', 'F_STORE_QUERY', 'F_RENAME_CORRELATION']
-      exposed_to: ['F_ACTIVATE']
+      exposed_to: ['F_TRACK_LIFECYCLE']
     notes:
       - 'Callbacks do watcher engolem exceções: um throw não tratado ali derruba o extension host inteiro'
       - 'Constantes: RENAME_CORRELATION_WINDOW_MS=5000, RENAME_GRACE_WINDOW_MS=500, DEFAULT_CAPTURE_DEBOUNCE_SECONDS=15 (backtrail.captureDebounceSeconds)'
       - 'Fase 6 (28/07): scheduleDebouncedCapture costumava só reler o arquivo quando o timer disparava — se um delete/rename chegasse antes disso, o readFileSync do disparo falhava (ENOENT) e a edição pendente era descartada em silêncio (catch vazio). Agora captureIfNotIgnored lê o conteúdo NA HORA do evento e guarda os bytes junto do timer (PendingCapture); o timer só decide QUANDO persistir, nunca mais precisa reler o disco. registerPendingDeletion (o handler de delete) também flusha essa captura pendente antes de montar o registro de correlação de rename — sem isso, um rename no meio da janela de debounce comparia o hash pré-edição (ainda no índice) contra o hash pós-edição que o lado create acabou de ler, e nunca correlacionava. Custo aceito: um read síncrono por evento em vez de só no disparo do timer — trade-off documentado, ver README § Known limitations'
+      - 'Fase 7 (31/07, PR #50): pendingDeletions/pendingCaptureTimers/captureDebounceTimers, antes passados por parâmetro através de captureIfNotIgnored (10 params), scheduleDebouncedCapture (10 params) e registerPendingDeletion (7 params), agora vivem no closure de createWatcherSession — um por pasta vigiada. watchTrackedFolder só cria o watcher e a sessão e liga os dois; comportamento e assinatura pública inalterados'
 
   - id: 'F_BASELINE'
     name: 'Capturar Baseline de Pasta Recém-Rastreada'
@@ -374,7 +405,7 @@ functions:
         external_calls: []
     boundaries:
       depends_on: ['F_IGNORE', 'F_BINARY', 'F_CAPTURE', 'F_STORE_QUERY']
-      exposed_to: ['F_ACTIVATE (onFolderTracked)']
+      exposed_to: ['F_TRACK_LIFECYCLE (onFolderTracked)']
     notes:
       - 'BASELINE_CHUNK_SIZE=200 — trade-off documentado no código entre custo de índice e memória'
 
@@ -449,15 +480,16 @@ functions:
     responsibilities:
       - 'Listar versões de uma série, ler conteúdo de blob, achar série ativa por relPath, listar arquivos ativos de uma pasta'
       - "Regra 'série ativa': a última versão da série define o relPath atual; primeiro match vence quando há duplicata"
+      - 'getActiveSeries (Fase 7, 31/07): achar a série ativa por relPath E devolver seu histórico completo numa única chamada — wrapper de findActiveSeriesId+listVersions, usado por quem precisa do estado atual de UM arquivo (F_DECORATE, F_SEEN via decorationProvider, F_HISTORY_VIEW), não introduz semântica nova'
     non_responsibilities:
       - 'NÃO escreve nada no store'
     entities: ['SérieDeVersões', 'Blob']
     interfaces:
-      code_ref: 'src/snapshotStore.ts:listVersions,readSnapshotContent,findActiveSeriesId,listActiveFiles,hardenBucketPermissions'
+      code_ref: 'src/snapshotStore.ts:listVersions,readSnapshotContent,findActiveSeriesId,getActiveSeries,listActiveFiles,hardenBucketPermissions'
       inputs:
         - 'storeRoot, absoluteFolderPath, seriesId|relPath'
       outputs:
-        - 'SnapshotVersion[] | Buffer | string|undefined | ActiveFile[]'
+        - 'SnapshotVersion[] | Buffer | string|undefined | ActiveFile[] | ActiveSeries|undefined'
       state: 'stateless'
       side_effects:
         database: null
@@ -476,10 +508,11 @@ functions:
           'F_SEEN',
           'F_DIFF',
           'F_RESTORE',
-          'F_ACTIVATE (hardenBucketPermissions, uma vez por bucket, marcada por sentinel .permissions-hardened)',
+          'F_TRACK_LIFECYCLE (hardenBucketPermissions, uma vez por bucket, marcada por sentinel .permissions-hardened)',
         ]
     notes:
       - 'É o maior fan-in do sistema: qualquer mudança de semântica aqui atravessa quase toda a UI'
+      - 'Fase 7 (31/07, PR #50): decorationProvider.ts (2 call sites) e historyTreeProvider.ts reimplementavam findActiveSeriesId+listVersions+"pegar a última versão" cada um à sua maneira — getActiveSeries centraliza a resolução de série; quem só precisa da última versão pega `.versions.at(-1)` do resultado'
       - 'readSnapshotContent verifica sha256 do blob lido contra version.contentHash e lança erro em mismatch (Fase 1 de hardening, 26/07) — F_DIFF e F_RESTORE capturam e mostram mensagem, não deixam a exceção crua propagar'
       - 'readIndex cacheia o StoreIndex parseado em memória, keyed pelo caminho do index.json e pelo mtime do arquivo (Fase 2 de performance, 26/07) — uma escrita de outra janela ou ferramenta externa muda o mtime e o cache é ignorado na próxima leitura, sem mensageria de invalidação. Leituras puras (listVersions/findActiveSeriesId/listActiveFiles) compartilham o objeto cacheado sem cópia — é o caminho quente da decoração do Explorer'
       - 'Caminhos de escrita (F_CAPTURE, F_PRUNE) NUNCA usam o objeto do cache diretamente — chamam readMutableIndex, que faz cópia rasa do mapa de séries antes de mutar. Sem isso, uma escrita que falhasse depois de mutar o índice em memória deixaria o cache à frente do disco (leituras mostrando uma versão nunca persistida). Ver IR_012'
@@ -511,7 +544,7 @@ functions:
         external_calls: []
     boundaries:
       depends_on: []
-      exposed_to: ['F_ACTIVATE']
+      exposed_to: ['F_ACTIVATE', 'F_TRACK_LIFECYCLE (startWatching, antes do primeiro watch de uma pasta)']
     notes:
       - 'Única função que DELETA dados PARCIALMENTE (por idade ou por excesso de versões) — ver F_DELETE_BUCKET para exclusão total de um bucket'
       - 'Idempotente e barata de chamar repetidamente — F_ACTIVATE agora a invoca por pasta em três momentos (ativação, setInterval diário, comando manual), não só uma vez por ativação'
@@ -526,7 +559,7 @@ functions:
       - 'Remover o bucket inteiro (index.json, .bak, blobs/) de uma pasta rastreada — rmSync recursivo, no-op se o bucket não existir'
       - 'Fase 6 (28/07): deleteBucketById(storeRoot, bucketId) — a mesma remoção, mas por id direto, sem depender de bucketIdFor/realpathSync'
     non_responsibilities:
-      - 'NÃO decide QUANDO apagar nem SE deve confirmar com o usuário — isso é responsabilidade do caller (F_UNTRACK_FOLDER pergunta; untrackAndForget em F_ACTIVATE apaga sem perguntar)'
+      - 'NÃO decide QUANDO apagar nem SE deve confirmar com o usuário — isso é responsabilidade do caller (F_UNTRACK_FOLDER pergunta; untrackAndForget em F_TRACK_LIFECYCLE apaga sem perguntar)'
     entities: ['SérieDeVersões', 'Blob']
     interfaces:
       code_ref: 'src/snapshotStore.ts:deleteBucket,deleteBucketById'
@@ -542,7 +575,7 @@ functions:
         external_calls: []
     boundaries:
       depends_on: []
-      exposed_to: ['F_UNTRACK_FOLDER', 'F_ACTIVATE (untrackAndForget)']
+      exposed_to: ['F_UNTRACK_FOLDER', 'F_TRACK_LIFECYCLE (untrackAndForget)']
     notes:
       - 'Adicionada na Fase 1 de hardening (26/07) — implementa a decisão do owner de que untrack deve poder apagar o histórico da pasta, em vez de deixá-lo órfão no storeRoot para sempre'
       - 'Junto com F_PRUNE, é a segunda função que DELETA dados do store — irreversível, sem teste de regressão não se mexe aqui'
@@ -1021,7 +1054,8 @@ workflows:
     name: 'Rastrear uma pasta nova'
     starts_at: 'F_TRACK_FOLDER'
     ends_at: 'F_BASELINE'
-    sequence: ['F_TRACK_FOLDER', 'F_GIT_GUARD', 'F_REGISTRY', 'F_ACTIVATE', 'F_WATCH', 'F_BASELINE']
+    sequence:
+      ['F_TRACK_FOLDER', 'F_GIT_GUARD', 'F_REGISTRY', 'F_ACTIVATE', 'F_TRACK_LIFECYCLE', 'F_WATCH', 'F_BASELINE']
 
   - id: 'W_EDIT'
     name: 'Save de arquivo vira versão no histórico'
@@ -1078,22 +1112,22 @@ relationships:
   - {
       id: 'R_001',
       from: 'F_ACTIVATE',
+      to: 'F_TRACK_LIFECYCLE',
+      type: 'calls',
+      coupling: 'tight',
+      channel: 'in-process',
+      criticality: 'critical',
+      description: 'Instancia e conecta o ciclo de vida de rastreamento aos comandos, views e ao dispose de ativação (Fase 7, 31/07, PR #50)',
+    }
+  - {
+      id: 'R_002',
+      from: 'F_TRACK_LIFECYCLE',
       to: 'F_WATCH',
       type: 'calls',
       coupling: 'tight',
       channel: 'in-process',
       criticality: 'critical',
       description: 'Cria um watcher por pasta rastreada na ativação e a cada track',
-    }
-  - {
-      id: 'R_002',
-      from: 'F_ACTIVATE',
-      to: 'F_BASELINE',
-      type: 'calls',
-      coupling: 'tight',
-      channel: 'in-process',
-      criticality: 'degraded_ok',
-      description: 'Dispara baseline cancelável em onFolderTracked',
     }
   - {
       id: 'R_003',
@@ -1305,6 +1339,46 @@ relationships:
       criticality: 'critical',
       description: 'Compartilham o formato StoreIndex/index.json — mudança de schema afeta os dois',
     }
+  - {
+      id: 'R_024',
+      from: 'F_TRACK_LIFECYCLE',
+      to: 'F_BASELINE',
+      type: 'calls',
+      coupling: 'tight',
+      channel: 'in-process',
+      criticality: 'degraded_ok',
+      description: 'Dispara baseline cancelável em onFolderTracked',
+    }
+  - {
+      id: 'R_025',
+      from: 'F_TRACK_LIFECYCLE',
+      to: 'F_REGISTRY',
+      type: 'writes_to',
+      coupling: 'tight',
+      channel: 'Shared Database',
+      criticality: 'critical',
+      description: 'recordBucketId/forgetBucketId em onFolderTracked/untrackAndForget; untrackFolder em untrackAndForget',
+    }
+  - {
+      id: 'R_026',
+      from: 'F_TRACK_LIFECYCLE',
+      to: 'F_DELETE_BUCKET',
+      type: 'calls',
+      coupling: 'tight',
+      channel: 'in-process',
+      criticality: 'critical',
+      description: 'untrackAndForget apaga o bucket incondicionalmente ao cancelar um baseline',
+    }
+  - {
+      id: 'R_027',
+      from: 'F_TRACK_LIFECYCLE',
+      to: 'F_STORE_QUERY',
+      type: 'calls',
+      coupling: 'tight',
+      channel: 'File',
+      criticality: 'degraded_ok',
+      description: 'hardenBucketPermissions e pruneOlderThan da pasta, antes do primeiro watch (startWatching)',
+    }
 ```
 
 ## Regras de Impacto
@@ -1404,7 +1478,7 @@ impact_rules:
     trigger:
       function_id: 'F_WATCH'
       change: 'comportamento — introduz debounce de captura (captureDebounceSeconds) para relPath com série já ativa'
-    affected_direct: ['F_ACTIVATE']
+    affected_direct: ['F_TRACK_LIFECYCLE']
     affected_indirect:
       [
         'F_HISTORY_VIEW (nova versão só aparece após o quiet window)',
@@ -1415,15 +1489,15 @@ impact_rules:
     risk: 'low'
     recommended_actions:
       - 'Escopo restrito ao branch existingSeriesId — rename correlation (create sem série ativa) permanece síncrono/imediato, sem interação com a janela de 5s (IR_009). Não estender o debounce para esse branch sem reavaliar a correlação'
-      - 'Timer por relPath (captureDebounceTimers) deve ser limpo no dispose junto com os de pending-deletion/grace — teste de regressão: "disposing the watcher cancels a pending debounced capture" em fileWatcher.test.ts'
-      - 'Ao disparar, lê o conteúdo do disco no momento do fire, não o do evento que agendou — captura sempre o estado mais recente; se o arquivo sumiu nesse meio-tempo (deletado/renomeado), a captura é descartada silenciosamente (mesmo padrão best-effort dos outros callbacks do watcher)'
+      - 'Timer por relPath (captureDebounceTimers) deve ser limpo no dispose junto com os de pending-deletion/grace — teste de regressão: "disposing the watcher cancels a pending debounced capture" em fileWatcher.test.ts. Desde a Fase 7 (31/07) esse dispose vive em createWatcherSession, chamado por watchTrackedFolder via vscode.Disposable — mesmo comportamento, outro arquivo'
+      - 'Corrigido na Fase 6 (28/07) — desatualizado até esta revisão (0.8.0, 31/07): lê o conteúdo do disco no momento do EVENTO que agenda a captura (captureIfNotIgnored), não no momento do fire do timer; o conteúdo fica guardado em PendingCapture até o timer decidir persistir. Antes da Fase 6, um delete/rename que chegasse antes do fire causava ENOENT no reread e a edição pendente era descartada em silêncio — ver a nota de Fase 6 em F_WATCH'
       - 'Suítes que testam correção de captura imediata (fileWatcher.test.ts "File Watcher Integration", historyTreeProvider.test.ts) usam captureDebounceSeconds: 0 — não reverter para o default de produção (15s) nelas'
 
   - id: 'IR_011'
     trigger:
       function_id: 'F_DELETE_BUCKET'
       change: 'comportamento — critério de quando apagar (quem confirma, quem não confirma)'
-    affected_direct: ['F_UNTRACK_FOLDER', 'F_ACTIVATE']
+    affected_direct: ['F_UNTRACK_FOLDER', 'F_TRACK_LIFECYCLE']
     affected_indirect: ['F_STORE_QUERY (bucket some inteiro, não parcialmente)']
     impact_type: 'behavioral'
     risk: 'high'
@@ -1444,9 +1518,9 @@ impact_rules:
 
   - id: 'IR_008'
     trigger:
-      function_id: 'F_ACTIVATE'
-      change: 'comportamento — semântica dos callbacks onFolderTracked/onFolderUntracked/onCapture'
-    affected_direct: ['F_TRACK_FOLDER', 'F_UNTRACK_FOLDER', 'F_WATCH']
+      function_id: 'F_TRACK_LIFECYCLE'
+      change: 'comportamento — semântica dos callbacks onFolderTracked/onFolderUntracked/onCapture (extraída de F_ACTIVATE na Fase 7, 31/07 — mesma regra, código só mudou de arquivo)'
+    affected_direct: ['F_ACTIVATE', 'F_TRACK_FOLDER', 'F_UNTRACK_FOLDER', 'F_WATCH']
     affected_indirect: ['F_HISTORY_VIEW', 'F_CHANGES_VIEW', 'F_TRACKED_VIEW', 'F_DECORATE', 'F_BASELINE']
     impact_type: 'behavioral'
     risk: 'medium'
@@ -1531,7 +1605,7 @@ impact_rules:
 Respostas do owner às perguntas em aberto do bootstrap — implementadas em 2026-07-26 (branch `feat/store-hardening`):
 
 1. **`restored/` nasce fora do tracking.** ✅ Implementado: `restored` está em `DEFAULT_IGNORED_FOLDERS` (F_IGNORE). Afetou F_RESTORE, F_WATCH, F_BASELINE.
-2. **Untrack dispara prune automático.** ✅ Implementado com a assimetria de confirmação que o owner sinalizou como necessária: `Stop Tracking` manual pergunta antes de apagar (F_UNTRACK_FOLDER, warning prompt); `untrackAndForget` do cancelamento de baseline (F_ACTIVATE) apaga sem perguntar. Nova função F_DELETE_BUCKET (IR_011) faz a exclusão em si; F_PRUNE (IR_006) continua sendo a exclusão parcial por idade.
+2. **Untrack dispara prune automático.** ✅ Implementado com a assimetria de confirmação que o owner sinalizou como necessária: `Stop Tracking` manual pergunta antes de apagar (F_UNTRACK_FOLDER, warning prompt); `untrackAndForget` do cancelamento de baseline (F_TRACK_LIFECYCLE desde a Fase 7, 31/07 — antes vivia em F_ACTIVATE) apaga sem perguntar. Nova função F_DELETE_BUCKET (IR_011) faz a exclusão em si; F_PRUNE (IR_006) continua sendo a exclusão parcial por idade.
 
 ## Perguntas em Aberto
 
@@ -1541,12 +1615,14 @@ open_questions: [] # perguntas do bootstrap respondidas em 2026-07-26 — ver Re
 
 ## Histórico de Revisões
 
-| Versão | Data       | Autor            | Mudanças                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------ | ---------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação                                                                                                                                                                                                                                                                                                                                                                          |
-| 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas                                                                                                                                                                                                                    |
-| 0.3.0  | 2026-07-26 | Claude (fde-mof) | Fase 2 de performance implementada (branch perf/index-cache): F_STORE_QUERY ganha cache de StoreIndex por mtime + readMutableIndex (nova IR_012); índice compacto sem pretty-print (F_CAPTURE); F_ACTIVATE ganha prune periódico (setInterval 24h) + comando backtrail.pruneNow, substituindo a limitação "só na ativação" (F_PRUNE não-responsabilidade e regra transversal atualizadas)                                                                                                                                     |
-| 0.4.0  | 2026-07-26 | Claude (fde-mof) | Fase 3 de captura inteligente implementada (branch feat/capture-throttle, commit 86f21a7): F_WATCH ganha debounce de 15s por relPath com série ativa (scheduleDebouncedCapture, nova IR_013), escopado para não tocar a correlação de rename (IR_009); F_PRUNE ganha cap de 100 versões por série após o filtro de idade (IR_006 atualizada); regra transversal nova sobre as duas mitigações combinadas                                                                                                                      |
-| 0.5.0  | 2026-07-27 | Claude (fde-mof) | Fase 4 de compressão implementada (branch feat/blob-compression, PR #36): F_CAPTURE grava blobs novos em gzip (node:zlib), F_STORE_QUERY descomprime por magic bytes e aceita os dois formatos sem migração (IR_001 atualizada com o mesmo precedente); primeira ADR do repo (docs/adr/0001-blob-compression.md) — medição real no corpus ~/.claude: 3.76x, não os ~10x estimados no plano                                                                                                                                    |
-| 0.6.0  | 2026-07-27 | Claude (fde-mof) | Fase 5 de exclusão granular implementada (branch feat/path-exclusion): tópico 7 completo — novas F_EXCLUDED_PATHS (persistência, IR_015), F_PURGE_PATH (purga retroativa, IR_014), F_MONITOR_VIEW (TreeView com checkbox nativo) e F_STOP_TRACKING_PATH (orquestra exclusão + purga opcional, compartilhada pelo checkbox e pelo menu de contexto da view Changes); F_IGNORE ganha excludedPathPrefixes (matching por segmento); F_ACTIVATE reinicia só o watcher da pasta afetada para a exclusão valer sem reload de janela |
+| Versão | Data       | Autor            | Mudanças                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------ | ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1.0  | 2026-07-26 | Claude (fde-mof) | Criação inicial — bootstrap completo, 100% verificado no código (v0.5.0)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 0.1.1  | 2026-07-26 | Claude (fde-mof) | Open questions respondidas pelo owner: restored/ fora do tracking; prune automático no untrack. Registradas como decisões pendentes de implementação                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 0.2.0  | 2026-07-26 | Claude (fde-mof) | Fase 1 de hardening implementada (branch feat/store-hardening): nova F_DELETE_BUCKET + IR_011; F_CAPTURE/F_STORE_QUERY atualizadas (escrita atômica, .bak, permissões 0600/0700, verificação de hash); F_IGNORE com ignoredFiles; F_RESTORE e F_UNTRACK_FOLDER com as duas decisões do owner implementadas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 0.3.0  | 2026-07-26 | Claude (fde-mof) | Fase 2 de performance implementada (branch perf/index-cache): F_STORE_QUERY ganha cache de StoreIndex por mtime + readMutableIndex (nova IR_012); índice compacto sem pretty-print (F_CAPTURE); F_ACTIVATE ganha prune periódico (setInterval 24h) + comando backtrail.pruneNow, substituindo a limitação "só na ativação" (F_PRUNE não-responsabilidade e regra transversal atualizadas)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 0.4.0  | 2026-07-26 | Claude (fde-mof) | Fase 3 de captura inteligente implementada (branch feat/capture-throttle, commit 86f21a7): F_WATCH ganha debounce de 15s por relPath com série ativa (scheduleDebouncedCapture, nova IR_013), escopado para não tocar a correlação de rename (IR_009); F_PRUNE ganha cap de 100 versões por série após o filtro de idade (IR_006 atualizada); regra transversal nova sobre as duas mitigações combinadas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 0.5.0  | 2026-07-27 | Claude (fde-mof) | Fase 4 de compressão implementada (branch feat/blob-compression, PR #36): F_CAPTURE grava blobs novos em gzip (node:zlib), F_STORE_QUERY descomprime por magic bytes e aceita os dois formatos sem migração (IR_001 atualizada com o mesmo precedente); primeira ADR do repo (docs/adr/0001-blob-compression.md) — medição real no corpus ~/.claude: 3.76x, não os ~10x estimados no plano                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 0.6.0  | 2026-07-27 | Claude (fde-mof) | Fase 5 de exclusão granular implementada (branch feat/path-exclusion): tópico 7 completo — novas F_EXCLUDED_PATHS (persistência, IR_015), F_PURGE_PATH (purga retroativa, IR_014), F_MONITOR_VIEW (TreeView com checkbox nativo) e F_STOP_TRACKING_PATH (orquestra exclusão + purga opcional, compartilhada pelo checkbox e pelo menu de contexto da view Changes); F_IGNORE ganha excludedPathPrefixes (matching por segmento); F_ACTIVATE reinicia só o watcher da pasta afetada para a exclusão valer sem reload de janela                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 0.7.0  | 2026-07-28 | Claude (fde-mof) | Retroativo — Fase 6 de hardening (28/07) não tinha entrada nesta tabela apesar de já estar documentada inline nas funções: F_WATCH corrige a leitura do debounce (conteúdo lido no evento, não no fire — PendingCapture); F_STORE_QUERY valida o formato do índice (parseStoreIndex) em vez de só JSON.parse+cast; F_REGISTRY ganha bucketIds (getBucketId/recordBucketId/forgetBucketId); F_DELETE_BUCKET ganha deleteBucketById e fallbackBucketId; F_ACTIVATE cria o output channel "Backtrail" e passa logWarning ao watcher. IR_013 foi corrigida nesta revisão (0.8.0) para refletir o comportamento pós-Fase-6, que estava desatualizada até agora                                                                                                                                                                                                                                                                                                                                   |
+| 0.8.0  | 2026-07-31 | Claude (fde-mof) | Fase 7 — sincronização pós-PR #50 (refactor: deepen hot-spot modules): nova F_TRACK_LIFECYCLE (src/trackedFolderLifecycle.ts) extraída de F_ACTIVATE — mesmos corpos e ordem de chamadas de onFolderTracked/onFolderUntracked/untrackAndForget/onExclusionChanged/startWatching/stopWatching, só mudou de arquivo (IR_008 realocada, IR_011/IR_013 atualizadas, novos R_024–R_027); F_STORE_QUERY ganha getActiveSeries (wrapper de findActiveSeriesId+listVersions, elimina duplicação em decorationProvider.ts e historyTreeProvider.ts); F_WATCH ganha createWatcherSession (pendingDeletions/pendingCaptureTimers/captureDebounceTimers saem de parâmetros posicionais para um closure por pasta vigiada). Candidato de unificar bucketIds/excludedPaths/seenVersions num helper genérico foi tentado e revertido — quebra test:unit (node --test não resolve import de valor sem extensão entre .ts do pacote, mesma restrição já documentada na nota de F_IGNORE sobre pathHasPrefix) |
