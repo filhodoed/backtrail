@@ -1,26 +1,20 @@
-import { basename } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesProvider } from './changesProvider';
 import { registerOpenChangedFileCommand, registerStopTrackingPathCommand } from './changesCommands';
 import { registerCommands } from './commands';
-import {
-	getCaptureDebounceSeconds,
-	getIgnoreConfigForFolder,
-	getMaxVersionsPerSeries,
-	getRetentionDays,
-} from './config';
+import { getMaxVersionsPerSeries, getRetentionDays } from './config';
 import { createDecorationProvider, markFileAsSeen, type BacktrailDecorationProvider } from './decorationProvider';
 import { registerDiffCommand } from './diffCommand';
-import { captureBaselineSnapshots, watchTrackedFolder } from './fileWatcher';
 import { BacktrailHistoryProvider } from './historyTreeProvider';
 import { registerMonitorCheckboxHandler } from './monitorCommands';
 import { MonitorProvider, type MonitorNode } from './monitorProvider';
 import { logCaptureWarning } from './outputChannel';
 import { registerRestoreCommand } from './restoreCommand';
-import { bucketIdFor, deleteBucket, hardenBucketPermissions, pruneOlderThan } from './snapshotStore';
+import { pruneOlderThan } from './snapshotStore';
+import { createTrackedFolderLifecycle } from './trackedFolderLifecycle';
 import { registerTrackedFoldersCommands } from './trackedFoldersCommands';
 import { TrackedFoldersProvider } from './trackedFoldersProvider';
-import { forgetBucketId, getBucketId, listTrackedFolders, recordBucketId, untrackFolder } from './trackedFolders';
+import { listTrackedFolders } from './trackedFolders';
 
 export const PRUNE_NOW_COMMAND = 'backtrail.pruneNow';
 
@@ -84,21 +78,19 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	registerRestoreCommand(context, storeRoot);
 	registerOpenChangedFileCommand(context, decorationProvider, changesProvider);
 
-	// A path excluded via the Monitor checkbox or the Changes context menu must
-	// stop being captured going forward, not just get purged retroactively —
-	// but ignoreConfig is only read once, at watcher creation (same limitation
-	// already noted for vscode settings — see IR_007 in docs/MOF.md). Restarting
-	// just this folder's watcher is the narrow fix: it picks up the freshly
-	// persisted exclusion without requiring a full window reload.
-	function onExclusionChanged(folder: string): void {
-		stopWatching(folder);
-		startWatching(folder);
-		monitorProvider.refresh();
-		changesProvider.refresh();
-	}
+	const lifecycle = createTrackedFolderLifecycle({
+		globalState: context.globalState,
+		storeRoot,
+		historyProvider,
+		decorationProvider,
+		trackedFoldersProvider,
+		changesProvider,
+		monitorProvider,
+		logWarning,
+	});
 
-	registerMonitorCheckboxHandler(context, monitorTreeView, storeRoot, onExclusionChanged);
-	registerStopTrackingPathCommand(context, storeRoot, onExclusionChanged);
+	registerMonitorCheckboxHandler(context, monitorTreeView, storeRoot, lifecycle.onExclusionChanged);
+	registerStopTrackingPathCommand(context, storeRoot, lifecycle.onExclusionChanged);
 
 	async function handleActiveEditorChange(editor: vscode.TextEditor | undefined): Promise<void> {
 		const uri = editor?.document.uri;
@@ -117,153 +109,18 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 	void handleActiveEditorChange(vscode.window.activeTextEditor);
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(handleActiveEditorChange));
 
-	const watchers = new Map<string, vscode.Disposable>();
-
-	function startWatching(folder: string): void {
-		if (watchers.has(folder)) {
-			return;
-		}
-		try {
-			hardenBucketPermissions(storeRoot, folder);
-			pruneOlderThan(storeRoot, folder, getRetentionDays(), new Date(), getMaxVersionsPerSeries());
-			watchers.set(
-				folder,
-				watchTrackedFolder(
-					folder,
-					storeRoot,
-					getIgnoreConfigForFolder(context.globalState, folder),
-					(uri) => {
-						historyProvider.notifyChange(uri);
-						decorationProvider.refresh(uri);
-						changesProvider.refresh();
-						if (vscode.window.activeTextEditor?.document.uri.fsPath === uri.fsPath) {
-							void markFileAsSeen(context.globalState, storeRoot, uri, decorationProvider)
-								.then(() => changesProvider.refresh())
-								.catch(() => {
-									// Same fire-and-forget rationale as handleActiveEditorChange above.
-								});
-						}
-					},
-					getCaptureDebounceSeconds(),
-					logWarning,
-				),
-			);
-		} catch (error) {
-			// A tracked folder that's gone (moved, deleted, unmounted drive)
-			// must not abort activation — every other folder, and command
-			// registration itself, still needs to happen below.
-			logWarning('startWatching', error, { folder });
-		}
-	}
-
-	function stopWatching(folder: string): void {
-		watchers.get(folder)?.dispose();
-		watchers.delete(folder);
-	}
-
-	async function untrackAndForget(folder: string): Promise<void> {
-		stopWatching(folder);
-		// Cancelling the baseline scan means "undo tracking this folder
-		// entirely" — unlike the manual Stop Tracking command, there's no
-		// history worth confirming about yet (the baseline that would have
-		// seeded it never finished), so the bucket is deleted unconditionally.
-		// fallbackBucketId covers the folder-vanished-mid-scan case, using the
-		// id recorded when tracking started (see onFolderTracked below).
-		deleteBucket(storeRoot, folder, getBucketId(context.globalState, folder));
-		await forgetBucketId(context.globalState, folder);
-		await untrackFolder(context.globalState, folder);
-		const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-		const index = workspaceFolders.findIndex((workspaceFolder) => workspaceFolder.uri.fsPath === folder);
-		if (index !== -1) {
-			vscode.workspace.updateWorkspaceFolders(index, 1);
-		}
-		trackedFoldersProvider.refresh();
-		monitorProvider.refresh();
-	}
-
-	function onFolderTracked(folder: string): void {
-		// Persist the bucketId now, while the folder is known to exist (it
-		// was just picked/typed and validated) — this is the only fallback
-		// deleteBucket has for a folder that's gone by the time it's
-		// untracked (see untrackAndForget above and untrackFolderCommand).
-		try {
-			void recordBucketId(context.globalState, folder, bucketIdFor(folder));
-		} catch (error) {
-			logWarning('onFolderTracked (recordBucketId)', error, { folder });
-		}
-
-		// The watcher starts immediately rather than waiting on the baseline
-		// scan below — a large folder's baseline can take a while now that
-		// it no longer blocks the extension host, and real edits made while
-		// it's still running shouldn't be missed. captureSnapshotsBatch's own
-		// active-series check keeps the two from racing incorrectly.
-		startWatching(folder);
-		trackedFoldersProvider.refresh();
-		changesProvider.refresh();
-		monitorProvider.refresh();
-
-		const cancellation = new vscode.CancellationTokenSource();
-
-		const scan = (async () => {
-			try {
-				await captureBaselineSnapshots(
-					folder,
-					storeRoot,
-					getIgnoreConfigForFolder(context.globalState, folder),
-					cancellation.token,
-				);
-			} catch {
-				// A folder that vanished mid-scan (moved, deleted) shouldn't
-				// surface as an error — watching already started above.
-			}
-		})();
-
-		// The Notification toast carries the only Cancel button the Progress
-		// API offers — cancelling mid-scan almost always means "I tracked
-		// the wrong folder," so Cancel here undoes the whole tracking, not
-		// just the baseline walk, instead of leaving it half-tracked with no
-		// history and no obvious way back.
-		void vscode.window
-			.withProgress(
-				{
-					location: vscode.ProgressLocation.Notification,
-					title: `backtrail: capturing baseline for "${basename(folder)}"… (cancel to stop tracking this folder)`,
-					cancellable: true,
-				},
-				(_progress, token) => {
-					token.onCancellationRequested(() => cancellation.cancel());
-					return scan;
-				},
-			)
-			.then(async () => {
-				if (cancellation.token.isCancellationRequested) {
-					await untrackAndForget(folder);
-				}
-				changesProvider.refresh();
-				cancellation.dispose();
-			});
-
-		// A second, title-less indicator scoped to the Changes view itself —
-		// the Notification toast above is easy to miss or auto-dismiss, and
-		// losing any in-panel sign of activity here read as "broken," not
-		// "still working," the first time a large folder was tracked.
-		void vscode.window.withProgress({ location: { viewId: 'backtrail.changes' } }, () => scan);
-	}
-
-	function onFolderUntracked(folder: string): void {
-		stopWatching(folder);
-		trackedFoldersProvider.refresh();
-		changesProvider.refresh();
-		monitorProvider.refresh();
-	}
-
 	for (const folder of listTrackedFolders(context.globalState)) {
-		startWatching(folder);
+		lifecycle.startWatching(folder);
 	}
 
-	registerCommands(context, onFolderTracked);
-	registerTrackedFoldersCommands(context, storeRoot, decorationProvider, onFolderTracked, onFolderUntracked, () =>
-		changesProvider.refresh(),
+	registerCommands(context, lifecycle.onFolderTracked);
+	registerTrackedFoldersCommands(
+		context,
+		storeRoot,
+		decorationProvider,
+		lifecycle.onFolderTracked,
+		lifecycle.onFolderUntracked,
+		() => changesProvider.refresh(),
 	);
 
 	function pruneAllTrackedFolders(): number {
@@ -294,12 +151,7 @@ export function activate(context: vscode.ExtensionContext): BacktrailApi {
 			);
 		}),
 		new vscode.Disposable(() => clearInterval(periodicPrune)),
-		new vscode.Disposable(() => {
-			for (const watcher of watchers.values()) {
-				watcher.dispose();
-			}
-			watchers.clear();
-		}),
+		new vscode.Disposable(() => lifecycle.dispose()),
 	);
 
 	return {
