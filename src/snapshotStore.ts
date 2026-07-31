@@ -427,6 +427,26 @@ export function findActiveSeriesId(storeRoot: string, absoluteFolderPath: string
 	return undefined;
 }
 
+export interface ActiveSeries {
+	seriesId: string;
+	versions: SnapshotVersion[];
+}
+
+// Every caller that needs "the current state of this specific file" (decoration,
+// mark-as-seen, history view) used to redo findActiveSeriesId + listVersions by
+// hand — three copies of the same two-call chain. This is that chain, once.
+export function getActiveSeries(
+	storeRoot: string,
+	absoluteFolderPath: string,
+	relPath: string,
+): ActiveSeries | undefined {
+	const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+	if (!seriesId) {
+		return undefined;
+	}
+	return { seriesId, versions: listVersions(storeRoot, absoluteFolderPath, seriesId) };
+}
+
 export interface ActiveFile {
 	relPath: string;
 	seriesId: string;

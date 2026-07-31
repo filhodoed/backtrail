@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getDecorationState, markManySeen, markSeen } from './seenVersions';
-import { findActiveSeriesId, listActiveFiles, listVersions } from './snapshotStore';
+import { getActiveSeries, listActiveFiles } from './snapshotStore';
 import { listTrackedFolders, resolveTrackedFolder, type KeyValueStore } from './trackedFolders';
 
 export interface BacktrailDecorationProvider extends vscode.FileDecorationProvider {
@@ -29,19 +29,14 @@ export function createDecorationProvider(globalState: KeyValueStore, storeRoot: 
 				return undefined;
 			}
 
-			const seriesId = findActiveSeriesId(storeRoot, match.folder, match.relPath);
-			if (!seriesId) {
-				return undefined;
-			}
-
-			const versions = listVersions(storeRoot, match.folder, seriesId);
-			const latest = versions[versions.length - 1];
-			if (!latest) {
+			const active = getActiveSeries(storeRoot, match.folder, match.relPath);
+			const latest = active?.versions[active.versions.length - 1];
+			if (!active || !latest) {
 				return undefined;
 			}
 
 			const color = new vscode.ThemeColor('gitDecoration.addedResourceForeground');
-			const state = getDecorationState(globalState, seriesId, latest.timestamp);
+			const state = getDecorationState(globalState, active.seriesId, latest.timestamp);
 			if (state === 'new') {
 				return { badge: 'N', tooltip: 'backtrail: new file', color, propagate: true };
 			}
@@ -65,18 +60,13 @@ export async function markFileAsSeen(
 		return;
 	}
 
-	const seriesId = findActiveSeriesId(storeRoot, match.folder, match.relPath);
-	if (!seriesId) {
+	const active = getActiveSeries(storeRoot, match.folder, match.relPath);
+	const latest = active?.versions[active.versions.length - 1];
+	if (!active || !latest) {
 		return;
 	}
 
-	const versions = listVersions(storeRoot, match.folder, seriesId);
-	const latest = versions[versions.length - 1];
-	if (!latest) {
-		return;
-	}
-
-	await markSeen(globalState, seriesId, latest.timestamp);
+	await markSeen(globalState, active.seriesId, latest.timestamp);
 	decorationProvider.refresh(uri);
 }
 
