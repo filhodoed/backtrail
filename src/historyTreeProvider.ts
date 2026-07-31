@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { SHOW_DIFF_COMMAND, SHOW_VERSION_INFO_COMMAND } from './diffCommand';
 import { canShowDiff } from './diffEligibility';
 import { formatBytes } from './format';
-import { findActiveSeriesId, listVersions, type SnapshotVersion } from './snapshotStore';
+import { getActiveSeries, type SnapshotVersion } from './snapshotStore';
 import { listTrackedFolders, resolveTrackedFolder } from './trackedFolders';
 
 export interface VersionTreeItem {
@@ -68,12 +68,12 @@ export class BacktrailHistoryProvider implements vscode.TreeDataProvider<Version
 			return [];
 		}
 
-		const seriesId = findActiveSeriesId(this.storeRoot, match.folder, match.relPath);
-		if (!seriesId) {
+		const active = getActiveSeries(this.storeRoot, match.folder, match.relPath);
+		if (!active) {
 			return [];
 		}
 
-		const versions = listVersions(this.storeRoot, match.folder, seriesId);
+		const { versions } = active;
 		const items: VersionTreeItem[] = versions.map((version, index) => ({
 			version,
 			previousVersion: index > 0 ? versions[index - 1] : undefined,

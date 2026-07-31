@@ -21,6 +21,7 @@ import {
 	deleteBucket,
 	deleteBucketById,
 	findActiveSeriesId,
+	getActiveSeries,
 	hardenBucketPermissions,
 	listVersions,
 	parseStoreIndex,
@@ -179,6 +180,28 @@ test('should_return_undefined_when_no_series_matches_rel_path', (t) => {
 	const seriesId = findActiveSeriesId(storeRoot, folder, 'outro-arquivo.md');
 
 	assert.equal(seriesId, undefined);
+});
+
+test('should_get_active_series_with_its_series_id_and_full_version_history', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false, daysAgo(1));
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v2'), false);
+
+	const active = getActiveSeries(storeRoot, folder, 'notas.md');
+
+	assert.equal(active?.seriesId, 'series-1');
+	assert.equal(active?.versions.length, 2);
+});
+
+test('should_return_undefined_from_get_active_series_when_no_series_matches_rel_path', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', Buffer.from('v1'), false);
+
+	assert.equal(getActiveSeries(storeRoot, folder, 'outro-arquivo.md'), undefined);
 });
 
 test('should_prune_versions_older_than_max_age_days', (t) => {
