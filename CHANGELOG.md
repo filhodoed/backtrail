@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.5] - 2026-07-31
+
+### Changed
+
+- Internal refactoring of the file-watching, folder-tracking, and version-lookup code paths, to reduce duplication and ease future maintenance — no functional changes.
+
 ## [0.9.4] - 2026-07-29
 
 ### Fixed
