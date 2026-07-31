@@ -65,10 +65,14 @@ export function watchTrackedFolder(
 	const pattern = new vscode.RelativePattern(folderUri, '**/*');
 	const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
 
-	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
-	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
-	const captureDebounceTimers = new Map<string, PendingCapture>();
-	const captureDebounceMs = captureDebounceSeconds * 1000;
+	const session = createWatcherSession(
+		absoluteFolderPath,
+		storeRoot,
+		ignoreConfig,
+		captureDebounceSeconds * 1000,
+		onCapture,
+		onWarning,
+	);
 
 	// Watcher callbacks run outside any caller's try/catch — an uncaught throw
 	// here (a file removed between the event and the read, an unreachable
@@ -76,58 +80,25 @@ export function watchTrackedFolder(
 	// just this capture. Best-effort: skip this event, keep watching.
 	const onCreateOrChange = (uri: vscode.Uri) => {
 		try {
-			captureIfNotIgnored(
-				absoluteFolderPath,
-				storeRoot,
-				uri,
-				ignoreConfig,
-				pendingDeletions,
-				pendingCaptureTimers,
-				captureDebounceTimers,
-				captureDebounceMs,
-				onCapture,
-			);
+			session.captureIfNotIgnored(uri);
 		} catch (error) {
 			onWarning?.('onCreateOrChange', error);
 		}
 	};
 	const onDelete = (uri: vscode.Uri) => {
 		try {
-			registerPendingDeletion(
-				absoluteFolderPath,
-				storeRoot,
-				uri,
-				pendingDeletions,
-				captureDebounceTimers,
-				onCapture,
-				onWarning,
-			);
+			session.registerPendingDeletion(uri);
 		} catch (error) {
 			onWarning?.('onDelete', error);
 		}
 	};
-
-	const cleanup = new vscode.Disposable(() => {
-		for (const { timer } of pendingDeletions.values()) {
-			clearTimeout(timer);
-		}
-		pendingDeletions.clear();
-		for (const timer of pendingCaptureTimers) {
-			clearTimeout(timer);
-		}
-		pendingCaptureTimers.clear();
-		for (const { timer } of captureDebounceTimers.values()) {
-			clearTimeout(timer);
-		}
-		captureDebounceTimers.clear();
-	});
 
 	return vscode.Disposable.from(
 		watcher,
 		watcher.onDidCreate(onCreateOrChange),
 		watcher.onDidChange(onCreateOrChange),
 		watcher.onDidDelete(onDelete),
-		cleanup,
+		new vscode.Disposable(() => session.dispose()),
 	);
 }
 
@@ -239,186 +210,177 @@ function* walkFiles(dir: string, ignoredFolders: string[]): Generator<string> {
 	}
 }
 
-function registerPendingDeletion(
+// Owns the three maps that used to be threaded through captureIfNotIgnored,
+// scheduleDebouncedCapture and registerPendingDeletion as 7-10 positional
+// params each. They're session state for one watched folder, not per-call
+// inputs — closing over them here means each entry point only takes what's
+// actually new on that call (the uri, sometimes the content).
+function createWatcherSession(
 	absoluteFolderPath: string,
 	storeRoot: string,
-	uri: vscode.Uri,
-	pendingDeletions: Map<string, TrackedPendingDeletion>,
-	captureDebounceTimers: Map<string, PendingCapture>,
-	onCapture?: (uri: vscode.Uri) => void,
-	onWarning?: WarningHandler,
-): void {
-	const relPath = relative(absoluteFolderPath, uri.fsPath);
-	const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
-	if (!seriesId) {
-		return;
-	}
-
-	// A save still debouncing when this delete/rename fired was already read
-	// into memory (see scheduleDebouncedCapture) but not yet persisted.
-	// Flush it now so lastVersion below — and this pending deletion's
-	// contentHash — reflect the file's real final content. Without this, a
-	// rename that lands mid-debounce wouldn't correlate: the create side
-	// reads the post-rename bytes, but this delete side would still be
-	// comparing against the pre-edit hash still sitting in the index.
-	const pendingCapture = captureDebounceTimers.get(relPath);
-	if (pendingCapture) {
-		clearTimeout(pendingCapture.timer);
-		captureDebounceTimers.delete(relPath);
-		try {
-			captureSnapshot(
-				storeRoot,
-				absoluteFolderPath,
-				seriesId,
-				relPath,
-				pendingCapture.content,
-				isBinaryContent(pendingCapture.content),
-			);
-			onCapture?.(uri);
-		} catch (error) {
-			// Same best-effort rationale as scheduleDebouncedCapture's own timer
-			// below — a write failure here must not crash the extension host.
-			onWarning?.('registerPendingDeletion (flush)', error, { relPath });
-		}
-	}
-
-	const versions = listVersions(storeRoot, absoluteFolderPath, seriesId);
-	const lastVersion = versions[versions.length - 1];
-	if (!lastVersion) {
-		return;
-	}
-
-	const timer = setTimeout(() => pendingDeletions.delete(relPath), RENAME_CORRELATION_WINDOW_MS);
-	pendingDeletions.set(relPath, { seriesId, relPath, contentHash: lastVersion.contentHash, timer });
-}
-
-function consumeMatchingPendingDeletion(
-	pendingDeletions: Map<string, TrackedPendingDeletion>,
-	contentHash: string,
-): PendingDeletion | undefined {
-	const match = findMatchingPendingDeletion(pendingDeletions, contentHash);
-	if (!match) {
-		return undefined;
-	}
-	const tracked = pendingDeletions.get(match.relPath);
-	if (tracked) {
-		clearTimeout(tracked.timer);
-	}
-	pendingDeletions.delete(match.relPath);
-	return match;
-}
-
-// A file already on an active series has no rename ambiguity left to resolve
-// — that only matters for the create/pending-deletion match below, the first
-// time a relPath joins a series. Repeat saves of an already-tracked file are
-// pure captures, so this is where consecutive saves collapse: rescheduling
-// the same relPath's timer on every event, and only actually reading +
-// capturing once the file has been quiet for captureDebounceMs.
-function scheduleDebouncedCapture(
-	storeRoot: string,
-	absoluteFolderPath: string,
-	seriesId: string,
-	relPath: string,
-	uri: vscode.Uri,
-	content: Buffer,
-	captureDebounceTimers: Map<string, PendingCapture>,
-	captureDebounceMs: number,
-	onCapture?: (uri: vscode.Uri) => void,
-	onWarning?: WarningHandler,
-): void {
-	const existing = captureDebounceTimers.get(relPath);
-	if (existing) {
-		clearTimeout(existing.timer);
-	}
-
-	const timer = setTimeout(() => {
-		captureDebounceTimers.delete(relPath);
-		try {
-			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
-			onCapture?.(uri);
-		} catch (error) {
-			// This timer fires after the sync handler that scheduled it already
-			// returned, so it's outside that handler's try/catch — an uncaught
-			// throw here (disk full, permission denied) would crash the extension
-			// host same as an uncaught throw in the sync path. Best-effort: skip.
-			onWarning?.('scheduleDebouncedCapture', error, { relPath });
-		}
-	}, captureDebounceMs);
-	captureDebounceTimers.set(relPath, { timer, content });
-}
-
-function captureIfNotIgnored(
-	absoluteFolderPath: string,
-	storeRoot: string,
-	uri: vscode.Uri,
 	ignoreConfig: IgnoreConfig,
-	pendingDeletions: Map<string, TrackedPendingDeletion>,
-	pendingCaptureTimers: Set<ReturnType<typeof setTimeout>>,
-	captureDebounceTimers: Map<string, PendingCapture>,
 	captureDebounceMs: number,
 	onCapture?: (uri: vscode.Uri) => void,
 	onWarning?: WarningHandler,
-): void {
-	const relPath = relative(absoluteFolderPath, uri.fsPath);
+) {
+	const pendingDeletions = new Map<string, TrackedPendingDeletion>();
+	const pendingCaptureTimers = new Set<ReturnType<typeof setTimeout>>();
+	const captureDebounceTimers = new Map<string, PendingCapture>();
 
-	let stats: ReturnType<typeof statSync>;
-	try {
-		stats = statSync(uri.fsPath);
-	} catch {
-		return;
-	}
-	if (stats.isDirectory()) {
-		return;
-	}
-	const sizeBytes = stats.size;
-
-	if (shouldIgnore(relPath, sizeBytes, ignoreConfig)) {
-		return;
-	}
-
-	const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
-	if (existingSeriesId) {
-		// Read now, not when the debounce timer fires — a delete/rename that
-		// lands before the timer elapses must not lose this content to a
-		// re-read against a path that's no longer there (see scheduleDebouncedCapture).
-		scheduleDebouncedCapture(
-			storeRoot,
-			absoluteFolderPath,
-			existingSeriesId,
-			relPath,
-			uri,
-			readFileSync(uri.fsPath),
-			captureDebounceTimers,
-			captureDebounceMs,
-			onCapture,
-			onWarning,
-		);
-		return;
-	}
-
-	const content = readFileSync(uri.fsPath);
-	const isBinary = isBinaryContent(content);
-	const contentHash = hashContent(content);
-
-	const immediateMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
-	if (immediateMatch) {
-		captureSnapshot(storeRoot, absoluteFolderPath, immediateMatch.seriesId, relPath, content, isBinary);
-		onCapture?.(uri);
-		return;
-	}
-
-	const graceTimer = setTimeout(() => {
-		pendingCaptureTimers.delete(graceTimer);
-		try {
-			const delayedMatch = consumeMatchingPendingDeletion(pendingDeletions, contentHash);
-			const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
-			captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
-			onCapture?.(uri);
-		} catch (error) {
-			// See comment in scheduleDebouncedCapture's timer above — this also
-			// runs after the sync handler returned, outside its try/catch.
-			onWarning?.('captureIfNotIgnored (grace timer)', error, { relPath });
+	function registerPendingDeletion(uri: vscode.Uri): void {
+		const relPath = relative(absoluteFolderPath, uri.fsPath);
+		const seriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+		if (!seriesId) {
+			return;
 		}
-	}, RENAME_GRACE_WINDOW_MS);
-	pendingCaptureTimers.add(graceTimer);
+
+		// A save still debouncing when this delete/rename fired was already read
+		// into memory (see scheduleDebouncedCapture) but not yet persisted.
+		// Flush it now so lastVersion below — and this pending deletion's
+		// contentHash — reflect the file's real final content. Without this, a
+		// rename that lands mid-debounce wouldn't correlate: the create side
+		// reads the post-rename bytes, but this delete side would still be
+		// comparing against the pre-edit hash still sitting in the index.
+		const pendingCapture = captureDebounceTimers.get(relPath);
+		if (pendingCapture) {
+			clearTimeout(pendingCapture.timer);
+			captureDebounceTimers.delete(relPath);
+			try {
+				captureSnapshot(
+					storeRoot,
+					absoluteFolderPath,
+					seriesId,
+					relPath,
+					pendingCapture.content,
+					isBinaryContent(pendingCapture.content),
+				);
+				onCapture?.(uri);
+			} catch (error) {
+				// Same best-effort rationale as scheduleDebouncedCapture's own timer
+				// below — a write failure here must not crash the extension host.
+				onWarning?.('registerPendingDeletion (flush)', error, { relPath });
+			}
+		}
+
+		const versions = listVersions(storeRoot, absoluteFolderPath, seriesId);
+		const lastVersion = versions[versions.length - 1];
+		if (!lastVersion) {
+			return;
+		}
+
+		const timer = setTimeout(() => pendingDeletions.delete(relPath), RENAME_CORRELATION_WINDOW_MS);
+		pendingDeletions.set(relPath, { seriesId, relPath, contentHash: lastVersion.contentHash, timer });
+	}
+
+	function consumeMatchingPendingDeletion(contentHash: string): PendingDeletion | undefined {
+		const match = findMatchingPendingDeletion(pendingDeletions, contentHash);
+		if (!match) {
+			return undefined;
+		}
+		const tracked = pendingDeletions.get(match.relPath);
+		if (tracked) {
+			clearTimeout(tracked.timer);
+		}
+		pendingDeletions.delete(match.relPath);
+		return match;
+	}
+
+	// A file already on an active series has no rename ambiguity left to resolve
+	// — that only matters for the create/pending-deletion match below, the first
+	// time a relPath joins a series. Repeat saves of an already-tracked file are
+	// pure captures, so this is where consecutive saves collapse: rescheduling
+	// the same relPath's timer on every event, and only actually reading +
+	// capturing once the file has been quiet for captureDebounceMs.
+	function scheduleDebouncedCapture(seriesId: string, relPath: string, uri: vscode.Uri, content: Buffer): void {
+		const existing = captureDebounceTimers.get(relPath);
+		if (existing) {
+			clearTimeout(existing.timer);
+		}
+
+		const timer = setTimeout(() => {
+			captureDebounceTimers.delete(relPath);
+			try {
+				captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinaryContent(content));
+				onCapture?.(uri);
+			} catch (error) {
+				// This timer fires after the sync handler that scheduled it already
+				// returned, so it's outside that handler's try/catch — an uncaught
+				// throw here (disk full, permission denied) would crash the extension
+				// host same as an uncaught throw in the sync path. Best-effort: skip.
+				onWarning?.('scheduleDebouncedCapture', error, { relPath });
+			}
+		}, captureDebounceMs);
+		captureDebounceTimers.set(relPath, { timer, content });
+	}
+
+	function captureIfNotIgnored(uri: vscode.Uri): void {
+		const relPath = relative(absoluteFolderPath, uri.fsPath);
+
+		let stats: ReturnType<typeof statSync>;
+		try {
+			stats = statSync(uri.fsPath);
+		} catch {
+			return;
+		}
+		if (stats.isDirectory()) {
+			return;
+		}
+		const sizeBytes = stats.size;
+
+		if (shouldIgnore(relPath, sizeBytes, ignoreConfig)) {
+			return;
+		}
+
+		const existingSeriesId = findActiveSeriesId(storeRoot, absoluteFolderPath, relPath);
+		if (existingSeriesId) {
+			// Read now, not when the debounce timer fires — a delete/rename that
+			// lands before the timer elapses must not lose this content to a
+			// re-read against a path that's no longer there (see scheduleDebouncedCapture).
+			scheduleDebouncedCapture(existingSeriesId, relPath, uri, readFileSync(uri.fsPath));
+			return;
+		}
+
+		const content = readFileSync(uri.fsPath);
+		const isBinary = isBinaryContent(content);
+		const contentHash = hashContent(content);
+
+		const immediateMatch = consumeMatchingPendingDeletion(contentHash);
+		if (immediateMatch) {
+			captureSnapshot(storeRoot, absoluteFolderPath, immediateMatch.seriesId, relPath, content, isBinary);
+			onCapture?.(uri);
+			return;
+		}
+
+		const graceTimer = setTimeout(() => {
+			pendingCaptureTimers.delete(graceTimer);
+			try {
+				const delayedMatch = consumeMatchingPendingDeletion(contentHash);
+				const seriesId = delayedMatch ? delayedMatch.seriesId : randomUUID();
+				captureSnapshot(storeRoot, absoluteFolderPath, seriesId, relPath, content, isBinary);
+				onCapture?.(uri);
+			} catch (error) {
+				// See comment in scheduleDebouncedCapture's timer above — this also
+				// runs after the sync handler returned, outside its try/catch.
+				onWarning?.('captureIfNotIgnored (grace timer)', error, { relPath });
+			}
+		}, RENAME_GRACE_WINDOW_MS);
+		pendingCaptureTimers.add(graceTimer);
+	}
+
+	function dispose(): void {
+		for (const { timer } of pendingDeletions.values()) {
+			clearTimeout(timer);
+		}
+		pendingDeletions.clear();
+		for (const timer of pendingCaptureTimers) {
+			clearTimeout(timer);
+		}
+		pendingCaptureTimers.clear();
+		for (const { timer } of captureDebounceTimers.values()) {
+			clearTimeout(timer);
+		}
+		captureDebounceTimers.clear();
+	}
+
+	return { captureIfNotIgnored, registerPendingDeletion, dispose };
 }
