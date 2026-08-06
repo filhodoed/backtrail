@@ -1,0 +1,278 @@
+<!doctype html>
+<!--
+  Fixed page shell for Mode D of the `mof` skill. Copy to docs/MOF.html and
+  fill the five markers; see visualization.md for what each one takes. Do not
+  retype this shell, do not restyle it per project, and do not list the marker
+  names in a comment here: a fill would substitute them inside the comment too,
+  and Mermaid's own arrow syntax would close the comment early and dump the
+  rest of the page as visible text.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Map of Functions — Backtrail</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-page: #f9f9f7; --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+    --border: rgba(11,11,11,0.10); --gridline: #e1e0d9;
+    --risk-critical: #d03b3b; --risk-serious: #ec835a; --risk-warning: #fab219;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-page: #0d0d0d; --surface-1: #1a1a19;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+      --border: rgba(255,255,255,0.10); --gridline: #2c2c2a;
+    }
+  }
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 1300px; margin-inline: auto; background: var(--surface-page); color: var(--text-primary); }
+  h1, h2 { color: var(--text-primary); }
+  p { color: var(--text-secondary); }
+  /* The diagram card stays on a fixed light surface even in dark mode:
+     live-recoloring a Mermaid SVG through CSS variables is not reliable
+     across browsers, so a fixed-contrast card is the safe choice. */
+  .diagram { overflow: auto; border: 1px solid rgba(11,11,11,0.10); background: #fcfcfb; border-radius: 8px; padding: 1rem; margin-block: 1.5rem; }
+  /* table-layout:fixed + overflow-wrap are required: without them, a cell
+     holding a long unbroken string (an ID list, say) forces the table past
+     100% and wider than the rest of the document. */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; margin-block: 1rem; background: var(--surface-1); }
+  th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--gridline); font-size: .9rem; vertical-align: top; color: var(--text-primary); overflow-wrap: anywhere; }
+  th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); }
+  tr.highlight { outline: 2px solid #2a78d6; }
+  .legend span { display: inline-flex; align-items: center; gap: .3rem; margin-right: 1rem; font-size: .85rem; color: var(--text-secondary); }
+  .dot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; }
+  /* Reinforcement for themeVariables below — plus one rule that is NOT
+     optional: Mermaid 11 wraps every label in a <p> inside a foreignObject,
+     so the generic `p` rule above lands on it and paints diagram text in the
+     page's dark-mode secondary ink over a card that stays light. Any selector
+     styling <p> page-wide has to be neutralized inside .mermaid. */
+  .mermaid p { color: #0b0b0b; margin: 0; }
+  .mermaid .edgeLabel { color: #0b0b0b; fill: #0b0b0b; background: #fcfcfb; font-weight: 500; }
+  .mermaid .cluster-label, .mermaid .nodeLabel { color: #0b0b0b; fill: #0b0b0b; font-weight: 500; }
+  .mermaid text { fill: #0b0b0b; }
+  .back-to-diagram {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: .55rem 1.1rem; font-size: .85rem; text-decoration: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,.2);
+  }
+</style>
+</head>
+<body>
+  <h1 id="diagram-top">Map of Functions — Backtrail</h1>
+  <p>Extensão VS Code que mantém histórico contínuo de arquivos em pastas sem git — captura cada save, exibe diffs e restaura versões sem sobrescrever os arquivos originais. MoF dividido por domínio desde v0.9.0 — este diagrama agrega os cinco arquivos em <code>docs/mof/</code>; ver <a href="MOF.md">docs/MOF.md</a> para o índice textual.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--risk-critical)"></span> high risk</span>
+    <span><span class="dot" style="background:var(--risk-serious)"></span> medium risk</span>
+    <span><span class="dot" style="background:var(--risk-warning)"></span> low risk</span>
+    <span><span class="dot" style="background:var(--text-muted)"></span> no impact rule</span>
+  </div>
+  <a href="#diagram-top" class="back-to-diagram">↑ Diagram</a>
+  <div class="diagram">
+    <pre class="mermaid">
+graph LR
+  classDef default fill:#fcfcfb,stroke:#52514e,stroke-width:1.25px,color:#0b0b0b;
+  classDef highRisk stroke:#d03b3b,stroke-width:3px;
+  classDef mediumRisk stroke:#ec835a,stroke-width:2.5px;
+  linkStyle default stroke:#52514e,stroke-width:1px;
+
+  subgraph D1["Rastreamento"]
+    F_ACTIVATE["Ativar e Orquestrar Extensão"]
+    F_TRACK_LIFECYCLE["Gerenciar Ciclo de Vida de Pastas Rastreadas"]
+    F_REGISTRY["Registro de Pastas Rastreadas"]
+    F_EXCLUDED_PATHS["Registro de Caminhos Excluídos por Pasta"]
+    F_TRACK_FOLDER["Rastrear Pasta"]
+    F_UNTRACK_FOLDER["Parar de Rastrear Pasta"]
+    F_STOP_TRACKING_PATH["Parar de Rastrear um Caminho"]
+    F_GIT_GUARD["Bloquear Pastas em Repositório Git"]
+  end
+
+  subgraph D2["Captura"]
+    F_WATCH["Vigiar Pasta Rastreada"]
+    F_BASELINE["Capturar Baseline de Pasta Recém-Rastreada"]
+    F_RENAME_CORRELATION["Correlacionar Renomeações"]
+    F_IGNORE["Filtrar Arquivos Ignorados"]
+    F_BINARY["Detectar Conteúdo Binário"]
+  end
+
+  subgraph D3["Armazenamento"]
+    F_CAPTURE["Registrar Snapshot no Store"]
+    F_STORE_QUERY["Consultar Histórico do Store"]
+    F_PRUNE["Aplicar Retenção de Snapshots"]
+    F_DELETE_BUCKET["Apagar Histórico Completo de uma Pasta"]
+    F_PURGE_PATH["Purgar Histórico Sob um Caminho Excluído"]
+  end
+
+  subgraph D4["Visualização"]
+    F_DIFF_ELIGIBILITY["Decidir Elegibilidade de Diff"]
+    F_HISTORY_VIEW["Exibir Histórico do Arquivo Ativo"]
+    F_CHANGES_VIEW["Exibir Mudanças Não Vistas"]
+    F_TRACKED_VIEW["Exibir Pastas Rastreadas"]
+    F_MONITOR_VIEW["Exibir e Alternar Exclusão de Caminhos"]
+    F_DECORATE["Decorar Arquivos no Explorer"]
+    F_SEEN["Gerenciar Estado Visto/Não-Visto"]
+    F_DIFF["Mostrar Diff entre Versões"]
+    F_OPEN_CHANGE["Abrir Mudança da Lista de Changes"]
+  end
+
+  subgraph D5["Restauração"]
+    F_RESTORE["Restaurar Versão"]
+  end
+
+  F_ACTIVATE -->|calls| F_TRACK_LIFECYCLE
+  F_TRACK_LIFECYCLE -->|calls| F_WATCH
+  F_ACTIVATE -->|calls| F_PRUNE
+  F_TRACK_FOLDER -->|calls| F_GIT_GUARD
+  F_TRACK_FOLDER -->|writes_to| F_REGISTRY
+  F_WATCH -->|calls| F_IGNORE
+  F_WATCH -->|writes_to| F_CAPTURE
+  F_WATCH -->|calls| F_RENAME_CORRELATION
+  F_WATCH -->|reads_from| F_STORE_QUERY
+  F_BASELINE -->|writes_to| F_CAPTURE
+  F_HISTORY_VIEW -->|reads_from| F_STORE_QUERY
+  F_CHANGES_VIEW -->|reads_from| F_STORE_QUERY
+  F_CHANGES_VIEW -->|reads_from| F_SEEN
+  F_DECORATE -->|reads_from| F_SEEN
+  F_DECORATE -->|reads_from| F_STORE_QUERY
+  F_DIFF -->|reads_from| F_STORE_QUERY
+  F_RESTORE -->|reads_from| F_STORE_QUERY
+  F_OPEN_CHANGE -.->|calls| F_DIFF
+  F_OPEN_CHANGE -->|writes_to| F_SEEN
+  F_HISTORY_VIEW -.->|calls| F_DIFF
+  F_WATCH -.->|publishes| F_ACTIVATE
+  F_SEEN -->|reads_from| F_STORE_QUERY
+  F_CAPTURE -->|writes_to| F_PRUNE
+  F_TRACK_LIFECYCLE -->|calls| F_BASELINE
+  F_TRACK_LIFECYCLE -->|writes_to| F_REGISTRY
+  F_TRACK_LIFECYCLE -->|calls| F_DELETE_BUCKET
+  F_TRACK_LIFECYCLE -->|calls| F_STORE_QUERY
+
+  class F_CAPTURE,F_STORE_QUERY,F_REGISTRY,F_PRUNE,F_DELETE_BUCKET,F_PURGE_PATH highRisk;
+  class F_SEEN,F_IGNORE,F_TRACK_LIFECYCLE,F_EXCLUDED_PATHS mediumRisk;
+
+  style D1 fill:#2a78d647,stroke:#2a78d6,color:#0b0b0b;
+  style D2 fill:#eb683447,stroke:#eb6834,color:#0b0b0b;
+  style D3 fill:#1baf7a47,stroke:#1baf7a,color:#0b0b0b;
+  style D4 fill:#eda10047,stroke:#eda100,color:#0b0b0b;
+  style D5 fill:#e87ba447,stroke:#e87ba4,color:#0b0b0b;
+
+  click F_ACTIVATE call focusRow("F_ACTIVATE")
+  click F_TRACK_LIFECYCLE call focusRow("F_TRACK_LIFECYCLE")
+  click F_REGISTRY call focusRow("F_REGISTRY")
+  click F_EXCLUDED_PATHS call focusRow("F_EXCLUDED_PATHS")
+  click F_TRACK_FOLDER call focusRow("F_TRACK_FOLDER")
+  click F_UNTRACK_FOLDER call focusRow("F_UNTRACK_FOLDER")
+  click F_STOP_TRACKING_PATH call focusRow("F_STOP_TRACKING_PATH")
+  click F_GIT_GUARD call focusRow("F_GIT_GUARD")
+  click F_WATCH call focusRow("F_WATCH")
+  click F_BASELINE call focusRow("F_BASELINE")
+  click F_RENAME_CORRELATION call focusRow("F_RENAME_CORRELATION")
+  click F_IGNORE call focusRow("F_IGNORE")
+  click F_BINARY call focusRow("F_BINARY")
+  click F_CAPTURE call focusRow("F_CAPTURE")
+  click F_STORE_QUERY call focusRow("F_STORE_QUERY")
+  click F_PRUNE call focusRow("F_PRUNE")
+  click F_DELETE_BUCKET call focusRow("F_DELETE_BUCKET")
+  click F_PURGE_PATH call focusRow("F_PURGE_PATH")
+  click F_DIFF_ELIGIBILITY call focusRow("F_DIFF_ELIGIBILITY")
+  click F_HISTORY_VIEW call focusRow("F_HISTORY_VIEW")
+  click F_CHANGES_VIEW call focusRow("F_CHANGES_VIEW")
+  click F_TRACKED_VIEW call focusRow("F_TRACKED_VIEW")
+  click F_MONITOR_VIEW call focusRow("F_MONITOR_VIEW")
+  click F_DECORATE call focusRow("F_DECORATE")
+  click F_SEEN call focusRow("F_SEEN")
+  click F_DIFF call focusRow("F_DIFF")
+  click F_OPEN_CHANGE call focusRow("F_OPEN_CHANGE")
+  click F_RESTORE call focusRow("F_RESTORE")
+    </pre>
+  </div>
+
+  <h2>Impact Rules</h2>
+  <table id="impact-rules">
+    <thead><tr><th>ID</th><th>Trigger</th><th>Change</th><th>Affected direct</th><th>Affected indirect</th><th>Risk</th><th>Recommended actions</th></tr></thead>
+    <tbody>
+      <tr><td>IR_001</td><td>F_CAPTURE</td><td>contrato — formato do StoreIndex/index.json ou SnapshotVersion</td><td>F_STORE_QUERY, F_PRUNE</td><td>F_WATCH, F_BASELINE, F_HISTORY_VIEW, F_CHANGES_VIEW, F_DECORATE, F_SEEN, F_DIFF, F_RESTORE</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Índices existentes no disco dos usuários NÃO são migráveis automaticamente — qualquer mudança de schema exige migração ou leitura retrocompatível em readIndex; atualizar test/unit/snapshotStore.test.ts e revisar todos os testes de provider; mesmo princípio se aplica ao formato de blob (ver ADR-0001)</td></tr>
+      <tr><td>IR_002</td><td>F_STORE_QUERY</td><td>comportamento — semântica de 'série ativa' (última versão define relPath; primeiro match vence)</td><td>F_WATCH, F_BASELINE, F_DECORATE, F_CHANGES_VIEW, F_HISTORY_VIEW, F_SEEN</td><td>F_DIFF, F_OPEN_CHANGE</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>É o maior fan-in do sistema — mudar a regra altera qual histórico cada arquivo mostra e qual série recebe o próximo snapshot; rodar test:unit e test:integration completos, revisar W_EDIT e W_RENAME de ponta a ponta</td></tr>
+      <tr><td>IR_005</td><td>F_REGISTRY</td><td>contrato — chave backtrail.trackedFolders ou formato (string[] de caminhos absolutos)</td><td>F_ACTIVATE, F_TRACK_FOLDER, F_UNTRACK_FOLDER, F_DECORATE, F_SEEN, F_HISTORY_VIEW, F_CHANGES_VIEW, F_TRACKED_VIEW</td><td>todas as demais — sem registro não há sistema</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Formato persiste entre sessões; migração obrigatória se mudar</td></tr>
+      <tr><td>IR_006</td><td>F_PRUNE</td><td>comportamento — critério de descarte ou GC de blobs</td><td>F_STORE_QUERY</td><td>F_DIFF, F_RESTORE (blob removido = diff/restore quebrado)</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Única função que apaga dados PARCIALMENTE — teste de regressão obrigatório para qualquer mudança; GC só remove blob sem referência remanescente; roda com mais frequência desde a Fase 2 (setInterval diário + comando manual); cap por versão (maxVersionsPerSeries) desde a Fase 3</td></tr>
+      <tr><td>IR_011</td><td>F_DELETE_BUCKET</td><td>comportamento — critério de quando apagar (quem confirma, quem não confirma)</td><td>F_UNTRACK_FOLDER, F_TRACK_LIFECYCLE</td><td>F_STORE_QUERY (bucket some inteiro, não parcialmente)</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Apaga o bucket INTEIRO, irreversível, sem lixeira — teste de regressão obrigatório; preservar a assimetria de confirmação (Stop Tracking manual pergunta antes; untrackAndForget do cancelamento de baseline apaga sem perguntar)</td></tr>
+      <tr><td>IR_014</td><td>F_PURGE_PATH</td><td>comportamento — critério de qual série é purgada, ou GC de blobs</td><td>F_STORE_QUERY, F_STOP_TRACKING_PATH</td><td>F_DIFF, F_RESTORE (blob removido = diff/restore quebrado)</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Terceira função que apaga dados do store — irreversível, sem teste de regressão não se mexe aqui; critério de match deve seguir a mesma regra de 'série ativa' de IR_002; GC de blob órfão deve usar o mesmo critério de referência de F_PRUNE</td></tr>
+      <tr><td>IR_003</td><td>F_CAPTURE</td><td>regra de negócio — dedup de saves (mesmo hash + mesmo relPath = mesma versão)</td><td>F_WATCH, F_BASELINE</td><td>F_HISTORY_VIEW (versões duplicadas), F_CHANGES_VIEW, F_RENAME_CORRELATION (rename de conteúdo idêntico depende de GERAR entrada)</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Cuidado com a exceção do rename: conteúdo igual com relPath diferente PRECISA gerar versão — é o único registro do rename</td></tr>
+      <tr><td>IR_004</td><td>F_SEEN</td><td>contrato — chave backtrail.seenVersions ou formato do mapa seriesId→timestamp</td><td>F_DECORATE, F_CHANGES_VIEW, F_OPEN_CHANGE</td><td>F_ACTIVATE (mark-seen do editor ativo)</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Estado persiste no globalState dos usuários — mudança de formato zera o 'visto' de todo mundo; comparação lexicográfica de timestamp exige manter toISOString (UTC)</td></tr>
+      <tr><td>IR_007</td><td>F_IGNORE</td><td>comportamento — regra de matching (segmento exato, extensão, tamanho)</td><td>F_WATCH, F_BASELINE</td><td>volume do store (ignorar de menos infla blobs; de mais perde histórico)</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Atualizar test/unit/ignoreFilters.test.ts; lembrar que config só é relida na criação do watcher</td></tr>
+      <tr><td>IR_008</td><td>F_TRACK_LIFECYCLE</td><td>comportamento — semântica dos callbacks onFolderTracked/onFolderUntracked/onCapture</td><td>F_ACTIVATE, F_TRACK_FOLDER, F_UNTRACK_FOLDER, F_WATCH</td><td>F_HISTORY_VIEW, F_CHANGES_VIEW, F_TRACKED_VIEW, F_DECORATE, F_BASELINE</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Ordem importa: watcher inicia ANTES do baseline; persistir rastreio ANTES de updateWorkspaceFolders; cancelamento do baseline desfaz o rastreio inteiro — preservar essa semântica</td></tr>
+      <tr><td>IR_012</td><td>F_STORE_QUERY</td><td>comportamento — estratégia de cache/invalidação do índice em memória (indexCache, readMutableIndex)</td><td>F_CAPTURE, F_PRUNE</td><td>F_WATCH, F_BASELINE, F_DECORATE, F_HISTORY_VIEW, F_CHANGES_VIEW, F_SEEN</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Caminhos de escrita DEVEM usar readMutableIndex, nunca o índice de readIndex diretamente; cache é keyed pelo mtime do index.json; rodar test/unit/snapshotStore.test.ts a cada mudança nesta área</td></tr>
+      <tr><td>IR_015</td><td>F_EXCLUDED_PATHS</td><td>contrato — chave backtrail.excludedPaths ou formato (Record&lt;folder, relPath[]&gt;)</td><td>F_IGNORE, F_MONITOR_VIEW, F_STOP_TRACKING_PATH</td><td>F_WATCH, F_BASELINE (via getIgnoreConfigForFolder)</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Formato persiste entre sessões; migração obrigatória se mudar; atualizar test/unit/excludedPaths.test.ts e test/unit/ignoreFilters.test.ts</td></tr>
+      <tr><td>IR_009</td><td>F_RENAME_CORRELATION</td><td>comportamento — janelas de tempo (5000/500ms) ou critério de match por hash</td><td>F_WATCH</td><td>F_HISTORY_VIEW (histórico quebrado em duas séries), F_CHANGES_VIEW (arquivo renomeado aparece como New)</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Falha de correlação não perde dados, só quebra a continuidade da série; atualizar test/unit/renameCorrelation.test.ts e fileWatcher.test.ts</td></tr>
+      <tr><td>IR_010</td><td>F_DIFF_ELIGIBILITY</td><td>comportamento — conjunto de extensões de imagem ou regra binário/texto</td><td>F_HISTORY_VIEW, F_CHANGES_VIEW</td><td>F_DIFF (recebe versões que assume exibíveis)</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Atualizar test/unit/diffEligibility.test.ts</td></tr>
+      <tr><td>IR_013</td><td>F_WATCH</td><td>comportamento — introduz debounce de captura (captureDebounceSeconds) para relPath com série já ativa</td><td>F_TRACK_LIFECYCLE</td><td>F_HISTORY_VIEW (nova versão só aparece após o quiet window), F_CHANGES_VIEW (badge Modified atrasa até a captura disparar), F_DECORATE</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Escopo restrito ao branch existingSeriesId, não estender sem reavaliar a correlação com IR_009; timer deve ser limpo no dispose junto com os de pending-deletion/grace; suítes que testam captura imediata usam captureDebounceSeconds: 0</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Functions</h2>
+  <table id="functions">
+    <thead><tr><th>ID</th><th>Name</th><th>Domain</th><th>Risk</th><th>Responsibilities</th></tr></thead>
+    <tbody>
+      <tr id="row-F_ACTIVATE"><td>F_ACTIVATE</td><td>Ativar e Orquestrar Extensão</td><td>Rastreamento</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Instanciar e registrar as três tree views, o decoration provider e todos os comandos; criar o output channel "Backtrail" e um logWarning repassado a F_TRACK_LIFECYCLE; rodar prune de retenção periodicamente e sob demanda; instanciar F_TRACK_LIFECYCLE e conectá-la aos comandos; iniciar o watch de toda pasta persistida na ativação; marcar arquivo ativo como visto a cada troca de editor</td></tr>
+      <tr id="row-F_TRACK_LIFECYCLE"><td>F_TRACK_LIFECYCLE</td><td>Gerenciar Ciclo de Vida de Pastas Rastreadas</td><td>Rastreamento</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Iniciar/parar o watcher de uma pasta, incluindo hardening de permissões e prune de retenção antes do primeiro watch; orquestrar onFolderTracked (persistir bucketId, iniciar watcher, refrescar views, baseline cancelável); orquestrar onFolderUntracked e untrackAndForget; reiniciar o watcher de uma pasta quando um caminho é excluído; expor dispose() que encerra todos os watchers ativos</td></tr>
+      <tr id="row-F_REGISTRY"><td>F_REGISTRY</td><td>Registro de Pastas Rastreadas</td><td>Rastreamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Listar, adicionar e remover pastas rastreadas persistidas em globalState; resolver se um caminho absoluto pertence a alguma pasta rastreada; filtrar entradas corrompidas defensivamente; persistir e recuperar o bucketId de cada pasta</td></tr>
+      <tr id="row-F_EXCLUDED_PATHS"><td>F_EXCLUDED_PATHS</td><td>Registro de Caminhos Excluídos por Pasta</td><td>Rastreamento</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Listar, adicionar e remover caminhos relativos excluídos, por pasta rastreada, em globalState</td></tr>
+      <tr id="row-F_TRACK_FOLDER"><td>F_TRACK_FOLDER</td><td>Rastrear Pasta</td><td>Rastreamento</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comandos backtrail.trackFolder, backtrail.addFolder e backtrail.addFolderByPath; bloquear pastas dentro de repositório git; confirmar em modal quando a pasta é o home inteiro do usuário; persistir o rastreio ANTES de mexer no workspace; anexar a pasta ao workspace sem substituir pastas existentes</td></tr>
+      <tr id="row-F_UNTRACK_FOLDER"><td>F_UNTRACK_FOLDER</td><td>Parar de Rastrear Pasta</td><td>Rastreamento</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comando backtrail.untrackFolder: remover do registro, parar watcher, oferecer remoção da pasta do Explorer; variante untrackAndForget usada quando o usuário cancela o baseline</td></tr>
+      <tr id="row-F_STOP_TRACKING_PATH"><td>F_STOP_TRACKING_PATH</td><td>Parar de Rastrear um Caminho</td><td>Rastreamento</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comando backtrail.stopTrackingPath e handler de checkbox da view Monitor: excluir um relPath e oferecer purgar seu histórico já salvo; reiniciar o watcher só da pasta afetada após excluir</td></tr>
+      <tr id="row-F_GIT_GUARD"><td>F_GIT_GUARD</td><td>Bloquear Pastas em Repositório Git</td><td>Rastreamento</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Detectar se um caminho está dentro de um repositório git subindo a árvore até a raiz procurando .git</td></tr>
+      <tr id="row-F_WATCH"><td>F_WATCH</td><td>Vigiar Pasta Rastreada</td><td>Captura</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Criar FileSystemWatcher por pasta rastreada e capturar snapshot a cada create/change não ignorado; registrar deleções como pendentes para correlação de rename; aplicar janela de graça de 500ms; debounce de 15s para saves consecutivos de relPath com série ativa; notificar consumidores via callback onCapture</td></tr>
+      <tr id="row-F_BASELINE"><td>F_BASELINE</td><td>Capturar Baseline de Pasta Recém-Rastreada</td><td>Captura</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Percorrer a árvore da pasta e capturar o estado atual de cada arquivo não ignorado como primeira versão; trabalhar em chunks de 200 arquivos cedendo o event loop entre chunks; respeitar token de cancelamento e pular arquivos com série já ativa</td></tr>
+      <tr id="row-F_RENAME_CORRELATION"><td>F_RENAME_CORRELATION</td><td>Correlacionar Renomeações</td><td>Captura</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Casar um create com uma deleção pendente de mesmo contentHash para manter a mesma série; escolher a deleção mais recente quando várias têm o mesmo hash</td></tr>
+      <tr id="row-F_IGNORE"><td>F_IGNORE</td><td>Filtrar Arquivos Ignorados</td><td>Captura</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Decidir se um relPath deve ser ignorado por tamanho, pasta, nome, extensão ou caminho excluído; ler configuração do usuário com defaults (node_modules, .git, dist, .env, etc.)</td></tr>
+      <tr id="row-F_BINARY"><td>F_BINARY</td><td>Detectar Conteúdo Binário</td><td>Captura</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Classificar conteúdo como binário se houver byte nulo nos primeiros 8000 bytes (mesma heurística do git)</td></tr>
+      <tr id="row-F_CAPTURE"><td>F_CAPTURE</td><td>Registrar Snapshot no Store</td><td>Armazenamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Anexar versão a uma série no index.json e gravar blob endereçado por sha256; deduplicar saves redundantes (conteúdo e relPath idênticos ao topo da série); variante batch para leitura/escrita única em N capturas</td></tr>
+      <tr id="row-F_STORE_QUERY"><td>F_STORE_QUERY</td><td>Consultar Histórico do Store</td><td>Armazenamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Listar versões de uma série, ler conteúdo de blob, achar série ativa por relPath, listar arquivos ativos de uma pasta; getActiveSeries resolve série ativa + histórico numa única chamada</td></tr>
+      <tr id="row-F_PRUNE"><td>F_PRUNE</td><td>Aplicar Retenção de Snapshots</td><td>Armazenamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Descartar versões mais antigas que retentionDays, remover séries vazias e coletar blobs órfãos; aplicar cap de versões por série (default 100) após o filtro de idade</td></tr>
+      <tr id="row-F_DELETE_BUCKET"><td>F_DELETE_BUCKET</td><td>Apagar Histórico Completo de uma Pasta</td><td>Armazenamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Remover o bucket inteiro (index.json, .bak, blobs/) de uma pasta rastreada; deleteBucketById apaga por id direto quando a pasta já não existe no disco</td></tr>
+      <tr id="row-F_PURGE_PATH"><td>F_PURGE_PATH</td><td>Purgar Histórico Sob um Caminho Excluído</td><td>Armazenamento</td><td><span class="dot" style="background:var(--risk-critical)"></span> alto</td><td>Remover retroativamente as séries cujo relPath ativo cai sob um prefixo de caminho, e fazer GC dos blobs órfãos</td></tr>
+      <tr id="row-F_DIFF_ELIGIBILITY"><td>F_DIFF_ELIGIBILITY</td><td>Decidir Elegibilidade de Diff</td><td>Visualização</td><td><span class="dot" style="background:var(--risk-warning)"></span> baixo</td><td>Texto sempre pode diff; binário só se for imagem (VS Code tem diff nativo de imagem)</td></tr>
+      <tr id="row-F_HISTORY_VIEW"><td>F_HISTORY_VIEW</td><td>Exibir Histórico do Arquivo Ativo</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>TreeView backtrail.history: listar versões do arquivo do editor ativo; clique abre diff ou info conforme elegibilidade; re-renderizar em troca de editor ativo e em captura</td></tr>
+      <tr id="row-F_CHANGES_VIEW"><td>F_CHANGES_VIEW</td><td>Exibir Mudanças Não Vistas</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>TreeView backtrail.changes: agrupar arquivos ativos por estado (Modified acima de New); clique dispara abertura com par (anterior, atual); tolerar pasta rastreada inacessível sem quebrar a lista das demais</td></tr>
+      <tr id="row-F_TRACKED_VIEW"><td>F_TRACKED_VIEW</td><td>Exibir Pastas Rastreadas</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>TreeView backtrail.trackedFolders: listar pastas rastreadas com context menu (Stop Tracking, Mark All Seen)</td></tr>
+      <tr id="row-F_MONITOR_VIEW"><td>F_MONITOR_VIEW</td><td>Exibir e Alternar Exclusão de Caminhos</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>TreeView backtrail.monitor: árvore por pasta rastreada espelhando o filesystem real; checkbox por nó refletindo se o relPath está excluído direto ou por herança</td></tr>
+      <tr id="row-F_DECORATE"><td>F_DECORATE</td><td>Decorar Arquivos no Explorer</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>FileDecorationProvider: badge N (novo) ou M (mudou) em arquivos de pastas rastreadas, com propagate para pastas pais; expor refresh(uri) e refreshAll()</td></tr>
+      <tr id="row-F_SEEN"><td>F_SEEN</td><td>Gerenciar Estado Visto/Não-Visto</td><td>Visualização</td><td><span class="dot" style="background:var(--risk-serious)"></span> médio</td><td>Persistir seriesId → último timestamp visto e derivar estado (new/changed/none); markManySeen aplica N entradas com uma única leitura/escrita; markFileAsSeen e markFolderAsSeen</td></tr>
+      <tr id="row-F_DIFF"><td>F_DIFF</td><td>Mostrar Diff entre Versões</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comando backtrail.showDiff: materializar os dois lados em tmpdir e abrir vscode.diff; comando backtrail.showVersionInfo para binários sem diff; limpar o tmpdir inteiro no dispose</td></tr>
+      <tr id="row-F_OPEN_CHANGE"><td>F_OPEN_CHANGE</td><td>Abrir Mudança da Lista de Changes</td><td>Visualização</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comando backtrail.openChangedFile: rotear para diff ou info, marcar a série como vista explicitamente e refrescar decoração + lista</td></tr>
+      <tr id="row-F_RESTORE"><td>F_RESTORE</td><td>Restaurar Versão</td><td>Restauração</td><td><span class="dot" style="background:var(--text-muted)"></span> —</td><td>Comando backtrail.restoreVersion: ler blob e gravar cópia em {pasta}/restored/... sem NUNCA sobrescrever o original; resolver colisões com sufixo incremental; slugificar segmentos de pasta</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: 'loose',
+      theme: 'base',
+      themeVariables: {
+        fontFamily: 'system-ui, sans-serif',
+        primaryColor: '#fcfcfb',
+        primaryTextColor: '#0b0b0b',
+        primaryBorderColor: '#52514e',
+        lineColor: '#52514e',
+        textColor: '#0b0b0b',
+        edgeLabelBackground: '#fcfcfb',
+        clusterBkg: '#fcfcfb',
+        clusterBorder: '#52514e'
+      }
+    });
+    function focusRow(id) {
+      document.querySelectorAll('tr.highlight').forEach(el => el.classList.remove('highlight'));
+      const row = document.getElementById('row-' + id);
+      // 'auto', never 'smooth': smooth-scroll animations depend on frames a
+      // throttled background tab may never deliver, leaving the click dead.
+      if (row) { row.classList.add('highlight'); row.scrollIntoView({ behavior: 'auto', block: 'center' }); }
+    }
+  </script>
+</body>
+</html>
