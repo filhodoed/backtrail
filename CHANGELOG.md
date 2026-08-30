@@ -4,6 +4,12 @@ All notable changes to the "backtrail" extension will be documented in this file
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] - 2026-08-30
+
+### Fixed
+
+- Capturing a snapshot now validates an existing content-addressed blob by SHA-256 and repairs it atomically when it is missing or corrupted, including deduplicated captures.
+
 ## [0.9.5] - 2026-07-31
 
 ### Changed
