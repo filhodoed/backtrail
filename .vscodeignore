@@ -24,3 +24,4 @@ media/filhodoed-publisher-128x128.png
 **/*.map
 **/*.ts
 **/.vscode-test.*
+AGENTS.md
