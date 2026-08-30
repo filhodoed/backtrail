@@ -39,6 +39,7 @@ functions:
       - 'Novos buckets/índices/blobs nascem em 0700/0600 (antes 0755/0644) — ver hardenBucketPermissions em F_STORE_QUERY para o sweep de buckets legados'
       - 'index.json é gravado sem pretty-print desde a Fase 2 de performance (26/07) — formato compacto, retrocompatível (JSON.parse não depende de indentação)'
       - 'Blobs novos são gravados gzip (node:zlib) desde a Fase 4 (27/07) — sha256 (contentHash) e sizeBytes continuam do conteúdo original, nunca do comprimido; compressão é puro detalhe de armazenamento. Blobs pré-Fase-4 continuam raw no disco, sem migração — ver F_STORE_QUERY para a leitura dual-formato'
+      - 'Ao capturar, blob existente só é reutilizado depois de validar seu conteúdo pelo SHA-256; blob ausente, truncado ou corrompido é regravado em arquivo temporário e renomeado antes de o índice apontar para a versão. A mesma verificação cobre capturas deduplicadas; teste em test/unit/snapshotStore.test.ts'
 
   - id: 'F_STORE_QUERY'
     name: 'Consultar Histórico do Store'
@@ -179,7 +180,6 @@ functions:
       - 'Adicionada na Fase 5 (27/07), tópico 7: exclusão por nome (F_IGNORE) só impede captura futura — sem isso, o que já foi capturado antes de a pasta virar excluída continuava ocupando espaço para sempre'
       - 'Terceira função que DELETA dados do store (junto de F_PRUNE e F_DELETE_BUCKET) — irreversível, sem teste de regressão não se mexe aqui'
       - 'A definição de "sob o prefixo" (isUnderPathPrefix) é duplicada localmente, não importada de ignoreFilters.ts — ver nota em F_IGNORE sobre a restrição do toolchain (node --test + allowImportingTsExtensions)'
-
 ```
 
 ## Entidades
@@ -195,7 +195,6 @@ entities:
     owner_domain: 'Armazenamento'
     read_by: ['F_STORE_QUERY (readSnapshotContent)', 'F_DIFF', 'F_RESTORE']
     modified_by: ['F_CAPTURE (cria)', 'F_PRUNE (GC de órfãos)', 'F_PURGE_PATH (GC de órfãos)']
-
 ```
 
 ## Eventos

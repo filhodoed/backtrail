@@ -285,6 +285,26 @@ interface ApplyCaptureResult {
 	changed: boolean;
 }
 
+function blobMatchesHash(blobPath: string, expectedHash: string): boolean {
+	try {
+		const raw = readFileSync(blobPath);
+		const content = isGzipped(raw) ? gunzipSync(raw) : raw;
+		return hashContent(content) === expectedHash;
+	} catch {
+		return false;
+	}
+}
+
+function ensureBlob(blobPath: string, content: Uint8Array, contentHash: string): void {
+	if (existsSync(blobPath) && blobMatchesHash(blobPath, contentHash)) {
+		return;
+	}
+
+	const temporaryPath = `${blobPath}.${process.pid}.tmp`;
+	writeFileSync(temporaryPath, gzipSync(content), { mode: FILE_MODE });
+	renameSync(temporaryPath, blobPath);
+}
+
 function applyCapture(
 	storeRoot: string,
 	bucketId: string,
@@ -295,6 +315,11 @@ function applyCapture(
 	const { seriesId, relPath, content, isBinary } = input;
 	const contentHash = hashContent(content);
 	const existingVersions = index.series[seriesId] ?? [];
+	const blobs = blobsDir(storeRoot, bucketId);
+	if (mkdirSync(blobs, { recursive: true, mode: DIR_MODE }) !== undefined) {
+		restrictToOwnerWindows(blobs);
+	}
+	const blobPath = join(blobs, `${contentHash}.blob`);
 
 	// Save can fire the watcher more than once for a single logical edit (VS
 	// Code re-emits on some platforms, a formatter re-saves identical output,
@@ -307,20 +332,15 @@ function applyCapture(
 	// still needs its own entry, since that's the only record of the rename.
 	const last = existingVersions[existingVersions.length - 1];
 	if (last && last.contentHash === contentHash && last.relPath === relPath) {
+		ensureBlob(blobPath, content, contentHash);
 		return { version: last, changed: false };
 	}
 
-	const blobs = blobsDir(storeRoot, bucketId);
-	if (mkdirSync(blobs, { recursive: true, mode: DIR_MODE }) !== undefined) {
-		restrictToOwnerWindows(blobs);
-	}
-	const blobPath = join(blobs, `${contentHash}.blob`);
-	if (!existsSync(blobPath)) {
-		// contentHash (and sizeBytes below) is always of the original content —
-		// compression is a storage detail, never part of the identity or the
-		// size shown to the user.
-		writeFileSync(blobPath, gzipSync(content), { mode: FILE_MODE });
-	}
+	// contentHash (and sizeBytes below) is always of the original content —
+	// compression is a storage detail, never part of the identity or the
+	// size shown to the user. A damaged existing blob is replaced before the
+	// index can point a new version at it.
+	ensureBlob(blobPath, content, contentHash);
 
 	const version: SnapshotVersion = {
 		relPath,
