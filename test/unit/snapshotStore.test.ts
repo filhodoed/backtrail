@@ -566,6 +566,21 @@ test('should_reject_reading_a_snapshot_whose_blob_content_does_not_match_its_rec
 	assert.throws(() => readSnapshotContent(storeRoot, folder, version), /corrupted/);
 });
 
+test('should_repair_a_corrupt_blob_when_capturing_the_same_snapshot_again', (t) => {
+	const storeRoot = makeTempDir(t, 'backtrail-store-');
+	const folder = makeTempDir(t, 'backtrail-folder-');
+	const bucketId = bucketIdFor(folder);
+	const content = Buffer.from('conteúdo original');
+
+	const version = captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', content, false);
+	writeFileSync(join(storeRoot, bucketId, 'blobs', `${version.contentHash}.blob`), 'conteúdo adulterado');
+
+	captureSnapshot(storeRoot, folder, 'series-1', 'notas.md', content, false);
+
+	assert.deepEqual(readSnapshotContent(storeRoot, folder, version), content);
+	assert.equal(listVersions(storeRoot, folder, 'series-1').length, 1);
+});
+
 test('should_store_a_new_blob_gzip_compressed_on_disk', (t) => {
 	const storeRoot = makeTempDir(t, 'backtrail-store-');
 	const folder = makeTempDir(t, 'backtrail-folder-');
